@@ -251,7 +251,7 @@ Níveis: `INFO` (etapa iniciada), `OK` (etapa concluída), `WARN` (atenção, ma
 sudo apt install python3 python3-venv postgresql-client mariadb-client
 
 # 2. código e ambiente Python
-sudo git clone https://github.com/kauandeon-dev/P.I.IFSC2026.git /opt/sentinela
+sudo git clone https://github.com/kauandeon-dev/Sentinela.git /opt/sentinela
 cd /opt/sentinela
 sudo python3 -m venv .venv
 sudo .venv/bin/pip install -r requirements.txt

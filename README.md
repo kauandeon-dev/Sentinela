@@ -896,6 +896,11 @@ seção 4.3) **e a chave**.
 | `O diretório de backup deve ficar isolado da aplicação` | Pasta dentro da aplicação ou do `SENTINELA_HOME` | Escolha outra pasta (idealmente outro disco) |
 | `Hash SHA-256 diferente do registrado — arquivo alterado` | A cópia foi modificada ou corrompida no disco | Não use essa cópia; restaure outra e investigue o disco |
 | `Já existe uma execução em andamento` | Outro backup/restauração rodando | Aguarde terminar (acompanhe em Logs) |
+| `O arquivo da cópia … está em uso por outro programa` (Windows) | Download em andamento ou antivírus lendo o arquivo | Espere o download terminar e tente de novo; a retenção tenta sozinha na próxima hora |
+| `Cliente 'pg_dump' não encontrado` (Windows) | PostgreSQL instalado fora de `C:\Program Files` | Informe o caminho em `SENTINELA_PG_DUMP` e `SENTINELA_PSQL` |
+| `Unknown table 'column_statistics'` | `mysqldump` antigo do MySQL contra MariaDB | Atualize o Sentinela (já corrigido) ou instale o cliente do MariaDB |
+| Docker: o painel não abre / `iniciar.bat` diz que o Docker não está aberto | Docker Desktop fechado | Abra o Docker Desktop e espere ficar *running* |
+| Docker: não conecta no banco em `localhost` | Dentro do contêiner `localhost` é o próprio contêiner | Use `host.docker.internal` (e libere o banco para a rede do Docker) |
 | Erros de destino externo | ver [seção 9.3](#93-mensagens-de-erro-dos-destinos) | |
 | `usuário ou senha do SMTP incorretos` | Senha errada ou conta exige senha de app | Gere uma senha de app no Gmail/Outlook |
 | `o servidor SMTP não oferece STARTTLS` | Servidor só aceita SSL ou texto puro | Escolha SSL/TLS (465) ou *Nenhuma* |
@@ -908,8 +913,32 @@ seção 4.3) **e a chave**.
 
 ```bash
 pip install -r requirements-dev.txt       # pytest, moto (S3 falso) e aiosmtpd (SMTP falso)
-python -m pytest -q tests                 # 136 testes
+python -m pytest -q tests                 # 141 testes
 ```
+
+### Testes automáticos a cada alteração (GitHub Actions)
+
+O workflow [`.github/workflows/testes.yml`](.github/workflows/testes.yml) roda sozinho a cada envio:
+
+| Ambiente | O que roda |
+|---|---|
+| **Windows** · Python 3.12 e 3.13 | Suíte completa com PostgreSQL 17 e MariaDB reais, **sem** os clientes no PATH (prova a busca automática em `C:\Program Files`), e um teste de fumaça com o painel rodando de verdade: login, conexão, backup, cópia externa, verificação e restauração |
+| **Ubuntu** · Python 3.12 | Suíte completa com PostgreSQL + o mesmo teste de fumaça |
+| **Docker** | Constrói a imagem, sobe ao lado de um PostgreSQL 17 com pastas montadas pertencentes ao root (pior caso) e roda o teste de fumaça dentro do contêiner |
+
+Os testes de SSH/SFTP usam o servidor simulado abaixo (namespace de rede Linux) e rodam no
+ambiente de desenvolvimento; no Windows eles são ignorados.
+
+Problemas que essa bateria encontrou no Windows e que foram corrigidos:
+
+| Problema | Correção |
+|---|---|
+| O `os.open` do Windows abre em modo texto e troca `\n` por `\r\n`: a **chave mestra e as cópias saíam corrompidas** (backup falhava na verificação; às vezes o próprio serviço não subia com "Chave mestra inválida") | Todos os arquivos binários abertos com `O_BINARY` |
+| `fcntl` não existe no Windows: o Sentinela nem iniciava | Trava entre processos com `msvcrt.locking` |
+| Arquivo em uso (download em andamento, antivírus) não pode ser apagado | Exclusão/retenção tentam de novo e explicam o motivo |
+| Instaladores não põem o `pg_dump` no PATH; e um `mysqldump` do MySQL 8 no PATH quebrava o dump do MariaDB (`COLUMN_STATISTICS`) | Busca nas pastas padrão priorizando `mariadb-dump`; `mysqldump` 8 recebe `--column-statistics=0` |
+| Senha do primeiro acesso não aparecia no log do serviço | Escrita imediata no log |
+| Console em cp1252 quebrava acentos e símbolos dos logs | Console em UTF-8 |
 
 Os testes de integração usam **bancos e servidores SSH reais**. Sem eles, são ignorados
 automaticamente (os unitários continuam rodando).
@@ -1000,6 +1029,7 @@ layout de celular.
 ```
 sentinela/
 ├── __main__.py    linha de comando (serve, passwd, backup, decrypt, sync, key)
+├── compat.py      diferenças Linux/Windows: arquivos binários, trava, permissões (ACL), console
 ├── engine.py      backup, verificação, restauração, retenção, logs, progresso, travas
 ├── replication.py cópias externas: envio conferido, retomada, exclusão, busca, importação, regra 3-2-1
 ├── destinations.py destinos: outro disco, SFTP (paramiko) e S3 (boto3)
@@ -1013,7 +1043,10 @@ sentinela/
 ├── web.py         API JSON, checklist de saúde, cabeçalhos de segurança
 └── static/        painel: HTML/CSS/JS puro (sem build), fontes IBM Plex locais
 tests/             unitários e integração (bancos e SSH reais) + tests/remote/ (servidor simulado)
-deploy/            serviço systemd
+deploy/            serviço systemd (Linux) e tarefa agendada (deploy/windows)
+Dockerfile, docker-compose.yml, docker/   imagem Docker
+iniciar.bat/.sh, parar.bat, trocar-senha.*  atalhos de um clique para o Docker
+.github/workflows/ testes automáticos (Windows, Ubuntu e Docker)
 docs/img/          capturas de tela
 ```
 

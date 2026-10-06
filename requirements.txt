@@ -2,3 +2,5 @@ flask>=3.0
 cryptography>=42
 waitress>=3.0
 paramiko>=3.4
+# destino de cópias externas S3 (AWS, Backblaze B2, Wasabi, R2, MinIO...)
+boto3>=1.34

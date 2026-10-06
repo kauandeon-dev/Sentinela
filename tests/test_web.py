@@ -138,3 +138,71 @@ def test_login_lockout_uses_real_ip_behind_proxy(env, monkeypatch):
     other = c.post("/api/login", json={"username": "admin", "password": "senha-forte-123"},
                    headers={"X-Forwarded-For": "198.51.100.7"})
     assert other.status_code == 200  # o administrador em outro IP não é bloqueado
+
+
+# ----------------------------------------------------- cópias externas e avisos
+
+def test_destinations_api_hides_secrets(env, s3):
+    c = _client(env)
+    _login(c)
+    c.put("/api/policy", json={"directory": str(env["backups"])})
+    r = c.post("/api/destinations/test", json=s3["dest"])
+    assert r.get_json()["ok"] is True
+    r = c.post("/api/destinations/test", json={**s3["dest"], "bucket": "nao-existe-abc"})
+    assert r.get_json() == {"ok": False, "error": "Não foi possível acessar o bucket nao-existe-abc: "
+                                                 "o bucket (ou objeto) não existe"}
+    r = c.post("/api/destinations", json=s3["dest"])
+    assert r.status_code == 201 and b"segredo" not in r.data
+    did = r.get_json()["destination"]["id"]
+    lst = c.get("/api/destinations").get_json()
+    assert lst["destinations"][0]["has_secret_key"] and b"segredo" not in c.get("/api/destinations").data
+    # editar sem o segredo mantém o salvo; o teste do formulário usa o segredo guardado
+    assert c.put(f"/api/destinations/{did}", json={"name": "Nuvem"}).status_code == 200
+    assert c.post("/api/destinations/test", json={"id": did, "type": "s3"}).get_json()["ok"]
+    assert c.post("/api/destinations", json={"type": "xyz"}).status_code == 400
+    assert c.post("/api/destinations/sync", json={}).get_json() == {"execution": None}
+    assert c.delete(f"/api/destinations/{did}").status_code == 200
+    assert c.get("/api/destinations").get_json()["destinations"] == []
+
+
+@needs_pg
+def test_backup_detail_lists_replicas_and_state_has_rule(env, s3):
+    c = _client(env)
+    _login(c)
+    c.put("/api/policy", json={"directory": str(env["backups"])})
+    c.put("/api/connection", json=PG)
+    c.post("/api/destinations", json=s3["dest"])
+    bid = c.post("/api/backups").get_json()["id"]
+    for _ in range(100):
+        if not c.get("/api/state").get_json()["running"]:
+            break
+        time.sleep(0.2)
+    d = c.get(f"/api/backups/{bid}").get_json()
+    assert d["replicas"][0]["status"] == "success" and d["replicas"][0]["dest_type"] == "s3"
+    assert d["backup"]["local"] is True
+    s = c.get("/api/state").get_json()
+    assert s["rule321"]["copies"] == 3 and s["rule321"]["offsite"] == 1
+    titles = [h["title"] for h in s["health"]]
+    assert "Regra 3-2-1" in titles and "Avisos de falha" in titles
+    assert "Chave mestra fora do servidor" in titles
+
+
+def test_notifications_api(env):
+    c = _client(env)
+    _login(c)
+    r = c.put("/api/notifications", json={"telegram": {"enabled": True, "token": "1:SEGREDO", "chat_id": "9"}})
+    assert r.status_code == 200 and b"SEGREDO" not in r.data
+    g = c.get("/api/notifications").get_json()
+    assert g["config"]["telegram"]["has_token"] and g["config"]["active"] == ["telegram"]
+    assert c.put("/api/notifications", json={"email": {"enabled": True}}).status_code == 400
+    assert c.post("/api/notifications/test", json={"telegram": {"enabled": False}}).status_code == 400
+
+
+def test_key_export_requires_password(env):
+    c = _client(env)
+    _login(c)
+    assert c.post("/api/key/export", json={"password": "errada"}).status_code == 403
+    r = c.post("/api/key/export", json={"password": "senha-forte-123"})
+    assert r.status_code == 200 and r.data == env["engine"].key()
+    assert "attachment" in r.headers["Content-Disposition"]
+    assert c.get("/api/state").get_json()["key_exported_at"]

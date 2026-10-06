@@ -368,7 +368,7 @@ textarea.input{resize:vertical;font-size:12px;line-height:1.5;display:block}
 .search{position:relative;flex:1;min-width:200px;max-width:340px}
 .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted-3)}
 .search .input{padding-left:34px}
-.chips{display:flex;gap:4px;background:var(--seg);padding:4px;border-radius:9px}
+.chips{display:flex;flex-wrap:wrap;gap:4px;background:var(--seg);padding:4px;border-radius:9px;max-width:100%}
 .chips div{padding:5px 10px;font-size:12px;font-weight:600;border-radius:6px;color:var(--muted);cursor:pointer;user-select:none;font-family:var(--mono)}
 .chips div:hover{color:var(--ink)}
 .chips div.on{background:var(--seg-on);color:var(--ink);box-shadow:0 1px 2px rgba(16,35,63,.12)}
@@ -428,3 +428,53 @@ textarea.input{resize:vertical;font-size:12px;line-height:1.5;display:block}
   .ln{flex-wrap:wrap;gap:0 10px}
   .ln .m{flex-basis:100%}
 }
+
+/* ======================================================= regra 3-2-1 / destinos */
+.pill.warn{background:var(--amber-bg);color:var(--amber-ink)}.pill.warn i{background:var(--amber)}
+.pill.muted{background:var(--seg);color:var(--muted)}.pill.muted i{background:var(--muted-3)}
+.tag.warn{background:var(--amber-bg);color:var(--amber-ink);font-family:inherit}
+.nav .badge.err{background:var(--red);animation:none}
+.nav .badge.warn{background:var(--amber);animation:none}
+.rule{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.rule-tile{border-radius:10px;padding:12px 10px;text-align:center;border:1px solid var(--line-2);background:var(--card-2)}
+.rule-tile .n{font-family:var(--mono);font-size:26px;font-weight:600;line-height:1}
+.rule-tile .l{font-size:12px;font-weight:600;margin-top:5px;color:var(--ink)}
+.rule-tile .s{font-size:11px;color:var(--muted);margin-top:2px}
+.rule-tile.ok{background:var(--green-bg);border-color:transparent}.rule-tile.ok .n{color:var(--green-ink)}
+.rule-tile.miss{background:var(--amber-bg);border-color:var(--amber-line)}.rule-tile.miss .n{color:var(--amber)}
+.dest-kv span:first-child{display:inline-flex;align-items:center;gap:7px;color:var(--ink)!important;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.di{width:38px;height:38px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--blue-soft);color:var(--blue)}
+.di.sm{width:24px;height:24px;border-radius:7px}
+.di.sm svg{width:14px;height:14px}
+.dest-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
+.dest.off{opacity:.72}
+.dest-head{display:flex;align-items:flex-start;gap:12px}
+.dest-name{font-weight:600;font-size:14px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.dest-target{font-size:11.5px;color:var(--muted);margin-top:3px;word-break:break-all}
+.dest-stats{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--muted);margin-top:14px}
+.dest-stats b{color:var(--ink);font-family:var(--mono);font-weight:600}
+.dest-status{font-size:12.5px;margin-top:8px;color:var(--ink-3);line-height:1.45;word-break:break-word}
+.dest-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-2)}
+.dest-form{border-color:var(--blue-line);box-shadow:0 0 0 3px var(--blue-glow)}
+.rep-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:14px 18px;border-bottom:1px solid var(--line-3)}
+.rep-row:last-child{border-bottom:none}
+.rep-main{display:flex;gap:12px;min-width:0}
+.rep-name{font-size:13.5px;font-weight:600}
+.rep-sub{font-size:11.5px;color:var(--muted);margin-top:3px;word-break:break-all}
+.rep-err{font-size:12px;color:var(--red-h);margin-top:5px;line-height:1.45}
+.rep-side{text-align:right;flex:none;display:flex;flex-direction:column;align-items:flex-end}
+.key-row{display:flex;gap:10px;flex-wrap:wrap}
+.key-row .input{flex:1;min-width:200px}
+.test-results{display:flex;flex-direction:column;gap:8px;margin:-6px 0 22px}
+@media (max-width:860px){
+  .dest-list{grid-template-columns:1fr}
+  .rep-row{flex-direction:column}
+  .rep-side{align-items:flex-start;text-align:left}
+}
+@media (max-width:560px){
+  .rule{gap:6px}
+  .rule-tile .n{font-size:22px}
+}
+.nav+.side-sec{margin-top:16px}
+.dest .hint .mono,.dest-form .hint .mono{word-break:break-all}
+.dest-list>*{min-width:0}

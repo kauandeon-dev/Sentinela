@@ -9,8 +9,10 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, session
 from werkzeug.security import check_password_hash
+from io import BytesIO
 
-from . import __version__, crypto, dumpers, engine, settings, storage
+from . import (__version__, crypto, destinations, dumpers, engine, notify, replication,
+               settings, storage)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -145,6 +147,11 @@ def create_app():
             key_path=str(settings.KEY_PATH),
             current=_current_view(),
             chart=history,
+            rule321=replication.rule_321(),
+            destinations=replication.dest_status(),
+            notify_channels=notify.public(notify.get_config())["active"],
+            key_id=engine.key_id(),
+            key_exported_at=storage.get_setting("key_exported_at"),
             health=_health(policy, conn, ok, disk, interval),
             limits={"retention": [settings.RETENTION_MIN, settings.RETENTION_MAX],
                     "interval": [settings.INTERVAL_MIN, settings.INTERVAL_MAX]},
@@ -192,7 +199,10 @@ def create_app():
         elif f == "error":
             sql += " AND status='error'"
         sql += " ORDER BY created_at DESC"
-        return jsonify(backups=[_pub(b) for b in storage.rows(sql, args)])
+        ext = {r["backup_id"]: r["n"] for r in storage.rows(
+            "SELECT backup_id, COUNT(*) n FROM replicas WHERE status='success' GROUP BY backup_id")}
+        return jsonify(backups=[{**_pub(b), "ext": ext.get(b["id"], 0)}
+                                for b in storage.rows(sql, args)])
 
     @app.post("/api/backups")
     @login_required
@@ -211,7 +221,15 @@ def create_app():
         related = storage.rows(
             "SELECT id, kind, started_at, status FROM executions WHERE backup_id=? AND kind!='backup' "
             "ORDER BY id DESC LIMIT 10", (bid,))
-        return jsonify(backup=_pub(b), logs=lines, executions=related)
+        reps = []
+        dests = {d["id"]: d for d in replication.get_destinations()}
+        for r in replication.replicas_of(bid):
+            d = dests.get(r["dest_id"])
+            r["dest_type"] = d["type"] if d else None
+            r["dest_type_label"] = destinations.TYPES.get(d["type"]) if d else "destino removido"
+            r["dest_target"] = destinations.describe(d) if d else ""
+            reps.append(r)
+        return jsonify(backup=_pub(b), logs=lines, executions=related, replicas=reps)
 
     @app.post("/api/backups/<bid>/verify")
     @login_required
@@ -235,11 +253,107 @@ def create_app():
     @login_required
     def download(bid):
         b = engine.get_backup(bid)
-        if not b or b["status"] != "success" or b["deleted_at"] or not b["path"] \
-                or not os.path.exists(b["path"]):
+        if not b or b["status"] != "success" or b["deleted_at"]:
             return jsonify(error="Arquivo indisponível"), 404
+        if not b["path"] or not os.path.exists(b["path"]):
+            return jsonify(error="A cópia não está neste servidor. Use \"Trazer para o servidor\" "
+                                 "para buscá-la num destino externo."), 404
         engine.log.info("Download da cópia %s por '%s'", bid, session["user"])
         return send_file(b["path"], as_attachment=True, download_name=os.path.basename(b["path"]),
+                         mimetype="application/octet-stream")
+
+    @app.post("/api/backups/<bid>/fetch")
+    @login_required
+    def fetch(bid):
+        return jsonify(execution=replication.start_fetch(bid)), 202
+
+    # ------------------------------------------------------- cópias externas (3-2-1)
+
+    @app.get("/api/destinations")
+    @login_required
+    def list_destinations():
+        return jsonify(destinations=replication.dest_status(), rule321=replication.rule_321(),
+                       types=destinations.TYPES, pending=len(replication.pending(manual=True)))
+
+    @app.post("/api/destinations")
+    @login_required
+    def create_destination():
+        data = body()
+        data.pop("id", None)
+        d = replication.save_destination(data)
+        return jsonify(destination=replication.public(d)), 201
+
+    @app.put("/api/destinations/<did>")
+    @login_required
+    def update_destination(did):
+        d = replication.save_destination({**body(), "id": did})
+        return jsonify(destination=replication.public(d))
+
+    @app.delete("/api/destinations/<did>")
+    @login_required
+    def remove_destination(did):
+        replication.delete_destination(did)
+        return jsonify(ok=True)
+
+    @app.post("/api/destinations/test")
+    @login_required
+    def test_destination():
+        try:
+            summary, fp = replication.test_destination(body())
+        except destinations.DestinationError as e:
+            return jsonify(ok=False, error=str(e))
+        except ValueError:
+            raise
+        except Exception as e:
+            return jsonify(ok=False, error=f"{type(e).__name__}: {e}")
+        return jsonify(ok=True, summary=summary, host_key=fp)
+
+    @app.post("/api/destinations/sync")
+    @login_required
+    def sync_destinations():
+        eid = replication.start_sync("manual", dest_id=body().get("id"))
+        return jsonify(execution=eid), 202 if eid else 200
+
+    @app.post("/api/destinations/<did>/import")
+    @login_required
+    def import_destination(did):
+        try:
+            return jsonify(replication.import_from(did))
+        except destinations.DestinationError as e:
+            return jsonify(error=str(e)), 502
+
+    # -------------------------------------------------------------------- avisos
+
+    @app.get("/api/notifications")
+    @login_required
+    def get_notifications():
+        hist = storage.rows("SELECT id, ts, event, channel, title, ok, error, attempts "
+                            "FROM notifications ORDER BY id DESC LIMIT 30")
+        return jsonify(config=notify.public(notify.get_config()), history=hist,
+                       events=notify.EVENTS, channels=notify.CHANNELS)
+
+    @app.put("/api/notifications")
+    @login_required
+    def put_notifications():
+        return jsonify(config=notify.public(notify.save(body(), engine.key())))
+
+    @app.post("/api/notifications/test")
+    @login_required
+    def test_notifications():
+        return jsonify(results=notify.send_test(body(), engine.key()))
+
+    # ------------------------------------------------------------- chave mestra
+
+    @app.post("/api/key/export")
+    @login_required
+    def export_key():
+        user = storage.get_user(session["user"])
+        if not user or not check_password_hash(user["password_hash"], str(body().get("password", ""))):
+            return jsonify(error="Senha incorreta"), 403
+        storage.set_setting("key_exported_at", storage.iso(storage.now()))
+        engine.log.info("Chave mestra exportada por '%s'", session["user"])
+        return send_file(BytesIO(engine.key()), as_attachment=True,
+                         download_name=f"sentinela-{engine.key_id()}.key",
                          mimetype="application/octet-stream")
 
     # ---------------------------------------------------------------------- logs
@@ -346,7 +460,36 @@ def _health(policy, conn, ok, disk, interval):
         add("ok" if free_ok else "warn", "Espaço em disco",
             "Espaço livre suficiente para as próximas cópias." if free_ok
             else "Pouco espaço livre no diretório de backup.")
-    add("info", "Chave mestra", "Guarde uma cópia da chave fora do servidor (regra 3-2-1).")
+    r = replication.rule_321()
+    if r["destinations"] == 0:
+        add("warn", "Regra 3-2-1", "Nenhum destino externo: todas as cópias estão num só lugar. "
+            "Adicione um disco externo e um destino fora do local em Cópias externas.")
+    elif r["ok"]:
+        add("ok", "Regra 3-2-1", f"{r['copies']} cópias · {r['media']} mídias · "
+            f"{r['offsite']} fora do local.")
+    elif r["backup_id"]:
+        miss = []
+        if r["copies"] < 3:
+            miss.append(f"{3 - r['copies']} cópia(s)")
+        if r["media"] < 2:
+            miss.append("uma segunda mídia (outro disco)")
+        if r["offsite"] < 1:
+            miss.append("uma cópia fora do local")
+        add("warn", "Regra 3-2-1", "Falta: " + ", ".join(miss) + ".")
+    failing = [d for d in replication.dest_status()
+               if d.get("enabled") and d["last"] and d["last"]["status"] == "error"]
+    for d in failing[:2]:
+        add("err", f"Cópia externa falhando · {d['name']}", d["last"]["error"] or "erro desconhecido")
+    channels = notify.public(notify.get_config())["active"]
+    add("ok" if channels else "warn", "Avisos de falha",
+        ("Ativos por " + ", ".join(notify.CHANNELS[c] for c in channels) + ".") if channels
+        else "Nenhum canal configurado: uma falha à meia-noite só aparece no painel.")
+    exported = storage.get_setting("key_exported_at")
+    if policy["encryption"] or exported:
+        add("ok" if exported else "warn", "Chave mestra fora do servidor",
+            f"Exportada em {datetime.fromisoformat(exported):%d/%m/%Y}." if exported
+            else "Exporte a chave e guarde fora do servidor: sem ela, nenhuma cópia "
+                 "(nem as externas) pode ser lida.")
     return items
 
 
@@ -389,4 +532,7 @@ def _pub(b):
         "sha256": b["sha256"],
         "verified_at": b["verified_at"],
         "verify_ok": None if b["verify_ok"] is None else bool(b["verify_ok"]),
+        "origin": b.get("origin"),
+        "key_id": b.get("key_id"),
+        "local": bool(b["path"]) and os.path.exists(b["path"]),
     }

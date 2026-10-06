@@ -5,6 +5,10 @@
     python -m sentinela backup             executa um backup agora
     python -m sentinela decrypt ARQ -o SAIDA.sql
                                            recupera o SQL de uma cópia sem o painel
+    python -m sentinela sync               envia ao(s) destino(s) externo(s) o que estiver pendente
+    python -m sentinela key export -o ARQ  exporta a chave mestra (guarde fora do servidor)
+    python -m sentinela key import ARQ     importa a chave de outra instalação (ler cópias antigas)
+    python -m sentinela key id             mostra o identificador da chave atual
 """
 
 import argparse
@@ -96,6 +100,48 @@ def cmd_decrypt(args):
         print(f"SQL recuperado em {args.output}")
 
 
+def cmd_sync(args):
+    from . import replication
+    engine.setup_logging()
+    storage.init()
+    try:
+        eid = replication.start_sync("manual", wait=True)
+    except engine.Busy as e:
+        sys.exit(f"Sincronização não iniciada: {e}")
+    if eid is None:
+        print("Nada pendente: todas as cópias já estão nos destinos externos.")
+        return
+    ex = storage.row("SELECT status FROM executions WHERE id=?", (eid,))
+    print(f"Sincronização #{eid}: {'concluída' if ex['status'] == 'success' else 'com falhas — veja os logs'}")
+    sys.exit(0 if ex["status"] == "success" else 1)
+
+
+def cmd_key(args):
+    storage.init()
+    if args.action == "id":
+        print(engine.key_id())
+    elif args.action == "export":
+        if not args.output:
+            sys.exit("Informe o arquivo de saída: -o ARQUIVO.key")
+        import os
+        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(engine.key())
+        storage.set_setting("key_exported_at", storage.iso(storage.now()))
+        print(f"Chave {engine.key_id()} exportada para {args.output}.")
+        print("Guarde-a FORA do servidor (pendrive, cofre de senhas). Quem tiver a chave e as "
+              "cópias consegue ler os dados.")
+    else:
+        if not args.file:
+            sys.exit("Informe o arquivo da chave: python -m sentinela key import ARQUIVO.key")
+        try:
+            kid, added = engine.import_key(_read_key(args.file))
+        except (OSError, ValueError) as e:
+            sys.exit(f"Erro: {e}")
+        print(f"Chave {kid} importada para o chaveiro." if added else
+              f"A chave {kid} já é a chave atual deste servidor.")
+
+
 def _read_key(path):
     with open(path, "rb") as f:
         return f.read()
@@ -123,6 +169,15 @@ def main():
     s.add_argument("-o", "--output", required=True, help="arquivo de saída ou '-' para stdout")
     s.add_argument("--key", help="caminho da chave mestra (padrão: a do SENTINELA_HOME)")
     s.set_defaults(fn=cmd_decrypt)
+
+    s = sub.add_parser("sync", help="envia aos destinos externos as cópias pendentes")
+    s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("key", help="exporta/importa a chave mestra")
+    s.add_argument("action", choices=["export", "import", "id"])
+    s.add_argument("file", nargs="?", help="arquivo da chave (import)")
+    s.add_argument("-o", "--output", help="arquivo de saída (export)")
+    s.set_defaults(fn=cmd_key)
 
     args = p.parse_args()
     args.fn(args)

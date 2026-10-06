@@ -49,6 +49,11 @@ def load_or_create_key(path=None):
     return key
 
 
+def key_id(key):
+    """Identificador público e curto de uma chave mestra (não revela a chave)."""
+    return derive(key, "sentinela/key-id").hex()[:16]
+
+
 def derive(key, label):
     """Deriva subchaves independentes a partir da chave mestra."""
     return hmac.new(key, label.encode(), hashlib.sha256).digest()

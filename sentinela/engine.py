@@ -65,6 +65,8 @@ SSH_SECRETS = ("password", "private_key", "key_passphrase")
 _seen_host_keys = {}
 
 TRIGGER_LABEL = {"auto": "automático", "manual": "manual", "pre-restore": "pré-restauração"}
+KIND_LABEL = {"backup": "Backup", "restore": "Restauração", "verify": "Verificação",
+              "replicate": "Cópias externas"}
 
 # Marcadores que os clientes escrevem no FINAL de um dump completo.
 DUMP_END_MARKERS = (b"PostgreSQL database dump complete", b"Dump completed")
@@ -154,6 +156,52 @@ def key():
     if _key is None:
         _key = crypto.load_or_create_key()
     return _key
+
+
+def key_id():
+    return crypto.key_id(key())
+
+
+def _keyring_path(kid):
+    return settings.KEYRING_DIR / f"{kid}.key"
+
+
+def has_key(kid):
+    if not kid or kid == key_id():
+        return True
+    p = _keyring_path(kid)
+    return p.exists()
+
+
+def key_for(kid):
+    """Chave mestra que criptografou uma cópia (a atual ou uma importada)."""
+    if not kid or kid == key_id():
+        return key()
+    p = _keyring_path(kid)
+    if p.exists():
+        data = p.read_bytes()
+        if len(data) == crypto.KEY_LEN and crypto.key_id(data) == kid:
+            return data
+    raise crypto.IntegrityError(
+        f"Esta cópia foi criptografada com outra chave mestra (id {kid}). Importe essa chave "
+        "no servidor: python -m sentinela key import ARQUIVO.key")
+
+
+def import_key(data):
+    """Adiciona uma chave mestra de outra instalação ao chaveiro (não substitui a atual)."""
+    if len(data) != crypto.KEY_LEN:
+        raise ValueError(f"Arquivo de chave inválido (esperado {crypto.KEY_LEN} bytes, "
+                         f"recebido {len(data)})")
+    kid = crypto.key_id(data)
+    if kid == key_id():
+        return kid, False
+    settings.KEYRING_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    p = _keyring_path(kid)
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    log.info("Chave mestra %s importada para o chaveiro", kid)
+    return kid, True
 
 
 # ===================================================================== config
@@ -546,9 +594,10 @@ def _begin_backup(trigger, conn):
     elog = ExecLog("backup", trigger, bid, conn["sgbd"], conn["dbname"])
     storage.execute(
         "INSERT INTO backups(id, execution_id, trigger, sgbd, dbname, created_at, status, "
-        "compressed, encrypted) VALUES(?,?,?,?,?,?, 'running', ?, ?)",
+        "compressed, encrypted, key_id) VALUES(?,?,?,?,?,?, 'running', ?, ?, ?)",
         (bid, elog.id, trigger, conn["sgbd"], conn["dbname"], iso(ts),
-         int(policy["compression"]), int(policy["encryption"])),
+         int(policy["compression"]), int(policy["encryption"]),
+         key_id() if policy["encryption"] else None),
     )
     if trigger != "pre-restore":
         _set_current(reset=True, kind="backup", trigger=trigger, backup_id=bid,
@@ -620,7 +669,8 @@ def _perform_backup(elog, bid, conn, policy):
         # Verificação de integridade logo após a gravação
         _backup_stage(stage="verificacao", bytes=0, total=stats["raw"])
         _check_plaintext(final, policy["compression"], policy["encryption"], stats["sha256"],
-                         Progress(None, "") if _current.get("kind") == "backup" else None)
+                         Progress(None, "") if _current.get("kind") == "backup" else None,
+                         key_id() if policy["encryption"] else None)
         elog("OK", "Integridade verificada: arquivo legível e dump completo")
 
         dur = time.monotonic() - t0
@@ -631,7 +681,6 @@ def _perform_backup(elog, bid, conn, policy):
              iso(now()), bid),
         )
         elog("OK", f"Backup concluído em {fmt_duration(dur)}")
-        elog.finish("success")
     except Exception as e:
         msg = str(e) if isinstance(e, (BackupError, dumpers.ToolNotFound, crypto.IntegrityError)) \
             else f"{type(e).__name__}: {e}"
@@ -649,15 +698,76 @@ def _perform_backup(elog, bid, conn, policy):
         )
         elog("ERRO", msg)
         elog("ERRO", "Backup abortado — nenhuma cópia foi criada")
-        elog.finish("error")
         if not isinstance(e, (BackupError, dumpers.ToolNotFound, tunnel.TunnelError)):
             log.exception("Detalhes do erro")
+        if elog.trigger != "pre-restore":
+            _notify_backup_failed(elog, conn, msg)
+        elog.finish("error")
         return
 
+    _after_backup(elog, bid)
+
+
+def _after_backup(elog, bid):
+    """Etapas depois de uma cópia local verificada: cópias externas (3-2-1),
+    retenção e avisos. Falhas aqui não invalidam a cópia local."""
+    try:
+        _after_backup_steps(elog, bid)
+    except Exception as e:
+        elog("WARN", f"Falha inesperada após o backup: {e}")
+        log.exception("Erro após o backup")
+    finally:
+        elog.finish("success")
+
+
+def _after_backup_steps(elog, bid):
+    from . import notify, replication
+    b = get_backup(bid)
+    results = []
+    if elog.trigger != "pre-restore":
+        try:
+            results = replication.replicate_backup(elog, b)
+        except Exception as e:
+            elog("WARN", f"Falha inesperada nas cópias externas: {e}")
+            log.exception("Erro nas cópias externas")
     try:
         apply_retention(elog)
     except Exception as e:
         elog("WARN", f"Falha ao aplicar retenção: {e}")
+    if elog.trigger != "pre-restore":
+        label = TRIGGER_LABEL.get(elog.trigger, elog.trigger)
+        replication.notify_failures(elog, b, results, f"backup {label}")
+        info = [f"Banco: {dumpers.SGBD_LABEL[b['sgbd']]} · {b['dbname']}",
+                f"Cópia: {b['id']} · {fmt_size(b['size'])} · {fmt_duration(b['duration'])}"]
+        if results:
+            ok = sum(1 for _, k, _ in results if k)
+            info.append(f"Cópias externas: {ok} de {len(results)} destino(s)")
+        prev = storage.row(
+            "SELECT status FROM backups WHERE trigger!='pre-restore' AND status!='running' "
+            "AND id!=? AND created_at<=? ORDER BY created_at DESC LIMIT 1", (bid, b["created_at"]))
+        if prev and prev["status"] == "error":
+            notify.notify("recovered", f"Backup voltou a funcionar · {b['dbname']}",
+                          info + ["O backup anterior tinha falhado; esta execução foi concluída "
+                                  "e verificada."], key(), elog)
+        else:
+            notify.notify("success", f"Backup concluído · {b['dbname']}", info, key(), elog)
+
+
+def _notify_backup_failed(elog, conn, msg):
+    from . import notify
+    last = storage.row("SELECT id, created_at FROM backups WHERE status='success' "
+                       "AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1")
+    ssh = conn.get("ssh") or {}
+    where = f"{conn.get('host')}:{conn.get('port')}" + (f" via SSH {ssh.get('host')}"
+                                                         if ssh.get("enabled") else "")
+    lines = [f"Banco: {dumpers.SGBD_LABEL.get(conn['sgbd'], conn['sgbd'])} · {conn['dbname']} em {where}",
+             f"Execução: backup {TRIGGER_LABEL.get(elog.trigger, elog.trigger)} iniciado em "
+             f"{elog.started:%d/%m/%Y %H:%M}",
+             f"Erro: {msg}",
+             (f"Última cópia válida: {last['id']} ({datetime.fromisoformat(last['created_at']):%d/%m/%Y %H:%M})"
+              if last else "ATENÇÃO: não existe nenhuma cópia válida deste banco."),
+             "Veja o log completo no painel (Logs)."]
+    notify.notify("backup_failed", f"Backup falhou · {conn['dbname']}", lines, key(), elog)
 
 
 class _RoutineCounter:
@@ -775,7 +885,7 @@ def file_sha256(path):
     return h.hexdigest()
 
 
-def iter_plaintext(path, compressed, encrypted, sink):
+def iter_plaintext(path, compressed, encrypted, sink, key_id=None):
     """Envia para ``sink`` o SQL original, desfazendo criptografia e compressão."""
     if compressed:
         d = zlib.decompressobj(31)
@@ -789,7 +899,7 @@ def iter_plaintext(path, compressed, encrypted, sink):
         inner = sink
 
     if encrypted:
-        crypto.decrypt_stream(path, key(), inner)
+        crypto.decrypt_stream(path, key_for(key_id), inner)
     else:
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(CHUNK), b""):
@@ -803,9 +913,9 @@ def iter_plaintext(path, compressed, encrypted, sink):
             raise crypto.IntegrityError("Arquivo gzip truncado")
 
 
-def _check_plaintext(path, compressed, encrypted, expected_sha=None, progress=None):
+def _check_plaintext(path, compressed, encrypted, expected_sha=None, progress=None, key_id=None):
     """Valida hash, autenticação, gzip e marcador de fim do dump. Retorna bytes de SQL."""
-    if not os.path.exists(path):
+    if not path or not os.path.exists(path):
         raise crypto.IntegrityError("Arquivo da cópia não encontrado no diretório")
     if expected_sha and file_sha256(path) != expected_sha:
         raise crypto.IntegrityError("Hash SHA-256 diferente do registrado — arquivo alterado")
@@ -817,7 +927,7 @@ def _check_plaintext(path, compressed, encrypted, expected_sha=None, progress=No
         if progress:
             progress.add(len(b))
     try:
-        iter_plaintext(path, compressed, encrypted, sink)
+        iter_plaintext(path, compressed, encrypted, sink, key_id)
     except zlib.error as e:
         raise crypto.IntegrityError(f"Conteúdo gzip inválido: {e}") from e
     if not any(m in state["tail"] for m in DUMP_END_MARKERS):
@@ -830,6 +940,9 @@ def get_backup(bid):
 
 
 def verify_backup(bid):
+    """Confere a cópia local (hash, autenticação, gzip, dump completo) e cada
+    cópia externa (lida de volta e comparada pelo SHA-256)."""
+    from . import notify, replication
     b = get_backup(bid)
     if not b or b["status"] != "success" or b["deleted_at"]:
         raise ValueError("Cópia indisponível para verificação")
@@ -839,23 +952,36 @@ def verify_backup(bid):
         _set_current(reset=True, kind="verify", trigger="manual", backup_id=bid, execution_id=elog.id,
                      started_at=iso(elog.started), stage="verificacao", bytes=0, total=b["raw_size"])
         elog("INFO", f"Verificando integridade da cópia {bid}")
-        try:
-            n = _check_plaintext(b["path"], b["compressed"], b["encrypted"], b["sha256"],
-                                 Progress(elog, "Verificando", b["raw_size"]))
-            elog("OK", "SHA-256 confere com o registrado")
-            if b["encrypted"]:
-                elog("OK", "Autenticação AES-256-GCM válida")
-            elog("OK", f"Dump completo e legível ({fmt_size(n)} de SQL)")
-            storage.execute("UPDATE backups SET verified_at=?, verify_ok=1 WHERE id=?",
-                            (iso(now()), bid))
-            elog.finish("success")
-            return True, None
-        except Exception as e:
-            storage.execute("UPDATE backups SET verified_at=?, verify_ok=0 WHERE id=?",
-                            (iso(now()), bid))
-            elog("ERRO", f"Cópia inválida: {e}")
+        problems = []
+        if b["path"] or b["origin"] != "imported":
+            try:
+                n = _check_plaintext(b["path"], b["compressed"], b["encrypted"], b["sha256"],
+                                     Progress(elog, "Verificando", b["raw_size"]), b["key_id"])
+                elog("OK", "SHA-256 confere com o registrado")
+                if b["encrypted"]:
+                    elog("OK", "Autenticação AES-256-GCM válida")
+                elog("OK", f"Dump completo e legível ({fmt_size(n)} de SQL)")
+                storage.execute("UPDATE backups SET verified_at=?, verify_ok=1 WHERE id=?",
+                                (iso(now()), bid))
+            except Exception as e:
+                storage.execute("UPDATE backups SET verified_at=?, verify_ok=0 WHERE id=?",
+                                (iso(now()), bid))
+                elog("ERRO", f"Cópia local inválida: {e}")
+                problems.append(f"cópia local: {e}")
+        else:
+            elog("INFO", "Cópia importada de um destino externo: não há arquivo local para conferir")
+        _set_current(stage="replicacao")
+        problems += replication.verify_replicas(elog, b)
+        if problems:
+            elog("ERRO", f"Verificação encontrou {len(problems)} problema(s)")
+            notify.notify("verify_failed", f"Verificação de integridade falhou · {b['dbname']}",
+                          [f"Cópia: {bid}"] + [f"Problema: {p}" for p in problems], key(), elog,
+                          dedup=f"verify:{bid}")
             elog.finish("error")
-            return False, str(e)
+            return False, "; ".join(problems)
+        elog("OK", "Verificação concluída: todas as cópias conferem")
+        elog.finish("success")
+        return True, None
     finally:
         _release()
 
@@ -899,7 +1025,20 @@ def _perform_restore(elog, b, conn):
             f" via SSH {conn['ssh']['host']}" if conn.get("ssh", {}).get("enabled") else "")
         elog("INFO", f"Iniciando restauração da cópia {b['id']} ({when})")
         elog("INFO", f'Destino: banco "{conn["dbname"]}" em {where}')
-        _check_plaintext(b["path"], b["compressed"], b["encrypted"], b["sha256"], Progress(None, ""))
+        try:
+            _check_plaintext(b["path"], b["compressed"], b["encrypted"], b["sha256"],
+                             Progress(None, ""), b["key_id"])
+        except crypto.IntegrityError as e:
+            from . import replication
+            if "outra chave mestra" in str(e) or not replication.replicas_of(b["id"]):
+                raise
+            elog("WARN", f"Cópia local indisponível ({e}) — buscando uma cópia externa íntegra")
+            _set_current(stage="busca")
+            replication.fetch_local(elog, b)
+            b = get_backup(b["id"])
+            _set_current(stage="verificacao", bytes=0)
+            _check_plaintext(b["path"], b["compressed"], b["encrypted"], b["sha256"],
+                             Progress(None, ""), b["key_id"])
         elog("OK", "Integridade da cópia verificada antes da restauração")
 
         # Cópia de segurança do estado atual, para permitir desfazer.
@@ -946,7 +1085,7 @@ def _perform_restore(elog, b, conn):
             definer = _DefinerFilter(write) if adapter.sgbd == "mariadb" else None
             sink = definer or write
             try:
-                iter_plaintext(b["path"], b["compressed"], b["encrypted"], sink)
+                iter_plaintext(b["path"], b["compressed"], b["encrypted"], sink, b["key_id"])
                 if definer:
                     definer.flush()
             finally:
@@ -972,9 +1111,13 @@ def _perform_restore(elog, b, conn):
     except Exception as e:
         elog("ERRO", str(e))
         elog("ERRO", "Restauração abortada")
-        elog.finish("error")
         if not isinstance(e, (BackupError, crypto.IntegrityError, dumpers.ToolNotFound)):
             log.exception("Detalhes do erro")
+        from . import notify
+        notify.notify("restore_failed", f"Restauração falhou · {conn['dbname']}",
+                      [f"Cópia: {b['id']}", f"Destino: {label} · {conn['dbname']}", f"Erro: {e}",
+                       "Veja o log completo no painel (Logs)."], key(), elog)
+        elog.finish("error")
 
 
 class _DefinerFilter:
@@ -1029,9 +1172,11 @@ def apply_retention(elog=None):
     newest = storage.row(
         "SELECT id FROM backups WHERE status='success' AND deleted_at IS NULL "
         "ORDER BY created_at DESC LIMIT 1")
+    # Cópias importadas de um destino (recuperação de desastre) nunca são
+    # apagadas automaticamente: só por exclusão manual.
     old = storage.rows(
         "SELECT * FROM backups WHERE deleted_at IS NULL AND status!='running' AND created_at < ? "
-        "ORDER BY created_at", (iso(cutoff),))
+        "AND COALESCE(origin, '') != 'imported' ORDER BY created_at", (iso(cutoff),))
     removed = 0
     for b in old:
         if newest and b["id"] == newest["id"]:
@@ -1040,6 +1185,7 @@ def apply_retention(elog=None):
             continue
         _remove_file(b)
         storage.execute("UPDATE backups SET deleted_at=? WHERE id=?", (iso(now()), b["id"]))
+        _delete_replicas(b, elog)
         removed += 1
         msg = f"Retenção: cópia {b['id']} excluída (mais antiga que {days} dias)"
         if elog:
@@ -1058,6 +1204,41 @@ def delete_backup(bid):
     _remove_file(b)
     storage.execute("UPDATE backups SET deleted_at=? WHERE id=?", (iso(now()), bid))
     log.info("Cópia %s excluída manualmente", bid)
+    _delete_replicas(b)
+
+
+def _delete_replicas(b, elog=None):
+    from . import replication
+    try:
+        replication.delete_replicas(b, elog)
+    except Exception as e:
+        (elog("WARN", f"Falha ao excluir cópias externas: {e}") if elog
+         else log.warning("Falha ao excluir cópias externas de %s: %s", b["id"], e))
+
+
+def check_late():
+    """Avisa se não há cópia válida recente (agendador parado, falhas seguidas...)."""
+    from . import notify
+    if not connection_ready():
+        return False
+    last = storage.row("SELECT created_at FROM backups WHERE status='success' "
+                       "AND trigger!='pre-restore' ORDER BY created_at DESC LIMIT 1")
+    since = storage.get_setting("first_ready_at")
+    if not since:
+        storage.set_setting("first_ready_at", iso(now()))
+        return False
+    ref = datetime.fromisoformat(last["created_at"] if last else since)
+    days = (now() - ref).total_seconds() / 86400
+    limit = interval_days() + 1
+    if days <= limit:
+        return False
+    msg = (f"A última cópia válida é de {ref:%d/%m/%Y %H:%M} ({int(days)} dias atrás)" if last
+           else f"Nenhuma cópia válida foi criada desde {ref:%d/%m/%Y %H:%M}")
+    notify.notify("late", "Backups atrasados", [msg, f"O agendamento é a cada {interval_days()} dia(s).",
+                                                "Confira o painel: o serviço pode estar parado ou "
+                                                "os backups falhando."],
+                  key(), dedup="late")
+    return True
 
 
 def _remove_file(b):

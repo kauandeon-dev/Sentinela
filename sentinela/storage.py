@@ -65,7 +65,50 @@ CREATE TABLE IF NOT EXISTS backups (
     deleted_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_backups_created ON backups(created_at);
+
+-- Cópias externas (regra 3-2-1): uma linha por cópia em cada destino.
+CREATE TABLE IF NOT EXISTS replicas (
+    id           INTEGER PRIMARY KEY,
+    backup_id    TEXT NOT NULL,
+    dest_id      TEXT NOT NULL,
+    dest_name    TEXT,
+    status       TEXT NOT NULL,         -- success | error | deleted | delete_pending
+    remote_name  TEXT,
+    remote_path  TEXT,
+    size         INTEGER,
+    sha256       TEXT,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    uploaded_at  TEXT,
+    verified_at  TEXT,
+    verify_ok    INTEGER,
+    error        TEXT,
+    deleted_at   TEXT,
+    UNIQUE(backup_id, dest_id)
+);
+
+-- Avisos enviados (e-mail, Telegram, webhook) e o resultado de cada envio.
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY,
+    ts          TEXT NOT NULL,
+    event       TEXT NOT NULL,
+    channel     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    ok          INTEGER NOT NULL,
+    error       TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 1,
+    retried_at  TEXT,
+    dedup       TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_notif_ts ON notifications(ts);
 """
+
+# Colunas acrescentadas depois da primeira versão (bancos já existentes).
+MIGRATIONS = (
+    ("backups", "key_id", "TEXT"),          # chave mestra usada na criptografia
+    ("backups", "origin", "TEXT"),          # NULL = gerada aqui · imported = achada num destino
+)
 
 _init_lock = threading.Lock()
 _initialized = False
@@ -95,6 +138,10 @@ def init():
         with _connect() as c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(SCHEMA)
+            for table, col, typ in MIGRATIONS:
+                cols = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+                if col not in cols:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
         _initialized = True
 
 

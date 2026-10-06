@@ -143,6 +143,51 @@ def _channel_error(exc, host, port):
     return f"o servidor SSH recusou abrir o canal para {target}: {text}"
 
 
+# ----------------------------------------------------------------- conexão
+
+def connect(s):
+    """Abre uma sessão SSH autenticada, conferindo a chave do host (TOFU).
+
+    Retorna ``(client, chave_vista)``; usada pelo túnel do banco e pelos
+    destinos SFTP das cópias externas."""
+    policy = _PinnedHostKey(s.get("host_key"))
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(policy)
+    host, port = s["host"], int(s.get("port") or 22)
+    kwargs = dict(hostname=host, port=port, username=s["user"],
+                  timeout=settings.CONNECT_TIMEOUT, banner_timeout=settings.CONNECT_TIMEOUT,
+                  auth_timeout=settings.CONNECT_TIMEOUT, allow_agent=False, look_for_keys=False)
+    if s.get("auth") == "key":
+        kwargs["pkey"] = load_private_key(s.get("private_key"), s.get("key_passphrase"))
+    else:
+        kwargs["password"] = s.get("password") or ""
+    try:
+        client.connect(**kwargs)
+    except HostKeyMismatch:
+        client.close()
+        raise
+    except paramiko.AuthenticationException as e:
+        client.close()
+        raise TunnelError("Falha na autenticação SSH (usuário, senha ou chave incorretos)") from e
+    except socket.gaierror as e:
+        client.close()
+        raise TunnelError(f"Não foi possível conectar ao servidor SSH {host}:{port}: "
+                          f"nome não encontrado ({host})") from e
+    except (paramiko.SSHException, OSError) as e:
+        client.close()
+        if isinstance(e, (socket.timeout, TimeoutError)):
+            reason = "tempo esgotado"
+        elif isinstance(e, paramiko.ssh_exception.NoValidConnectionsError):
+            reason = "conexão recusada (nada escutando nessa porta)"
+        else:
+            reason = e
+        raise TunnelError(f"Não foi possível conectar ao servidor SSH {host}:{port}: {reason}") from e
+    transport = client.get_transport()
+    transport.set_keepalive(15)
+    _enable_tcp_keepalive(transport.sock)
+    return client, policy.seen
+
+
 # --------------------------------------------------------------------- túnel
 
 class Tunnel:
@@ -162,39 +207,8 @@ class Tunnel:
 
     # ------------------------------------------------------------------ abrir
     def start(self):
-        s = self.ssh
-        policy = _PinnedHostKey(s.get("host_key"))
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(policy)
-        host, port = s["host"], int(s.get("port") or 22)
-        kwargs = dict(hostname=host, port=port, username=s["user"],
-                      timeout=settings.CONNECT_TIMEOUT, banner_timeout=settings.CONNECT_TIMEOUT,
-                      auth_timeout=settings.CONNECT_TIMEOUT, allow_agent=False, look_for_keys=False)
-        if s.get("auth") == "key":
-            kwargs["pkey"] = load_private_key(s.get("private_key"), s.get("key_passphrase"))
-        else:
-            kwargs["password"] = s.get("password") or ""
-        try:
-            client.connect(**kwargs)
-        except HostKeyMismatch:
-            client.close()
-            raise
-        except paramiko.AuthenticationException as e:
-            client.close()
-            raise TunnelError("Falha na autenticação SSH (usuário, senha ou chave incorretos)") from e
-        except socket.gaierror as e:
-            client.close()
-            raise TunnelError(f"Não foi possível conectar ao servidor SSH {host}:{port}: "
-                              f"nome não encontrado ({host})") from e
-        except (paramiko.SSHException, OSError) as e:
-            client.close()
-            reason = "tempo esgotado" if isinstance(e, (socket.timeout, TimeoutError)) else e
-            raise TunnelError(f"Não foi possível conectar ao servidor SSH {host}:{port}: {reason}") from e
-        self.client = client
-        self.host_key = policy.seen
-        self.transport = client.get_transport()
-        self.transport.set_keepalive(15)
-        _enable_tcp_keepalive(self.transport.sock)
+        self.client, self.host_key = connect(self.ssh)
+        self.transport = self.client.get_transport()
 
         self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

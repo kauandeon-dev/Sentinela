@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 
-from . import engine, settings
+from . import engine, notify, replication, settings
 from .storage import now
 
 log = logging.getLogger("sentinela")
@@ -53,9 +53,25 @@ class Scheduler(threading.Thread):
                     log.error("Backup automático não pôde ser iniciado: %s", e)
                 engine.schedule_next(now(), engine.interval_days())
 
-        # Limpeza periódica (retenção e logs antigos), a cada hora.
+        # Manutenção a cada hora: retenção, logs antigos, envios pendentes para
+        # os destinos externos, reenvio de avisos que falharam e alerta de atraso.
         if time.monotonic() - self._last_housekeeping > 3600:
             self._last_housekeeping = time.monotonic()
-            if not engine.is_busy():
-                engine.apply_retention()
-                engine.prune_exec_logs()
+            self.housekeeping()
+
+    def housekeeping(self):
+        if engine.is_busy():
+            self._last_housekeeping -= 3300  # tenta de novo em ~5 min
+            return
+        for name, fn in (("retenção", engine.apply_retention),
+                         ("limpeza de logs", engine.prune_exec_logs),
+                         ("sincronização das cópias externas",
+                          lambda: replication.start_sync("auto", wait=True)),
+                         ("reenvio de avisos", notify.retry_failed),
+                         ("verificação de atraso", engine.check_late)):
+            try:
+                fn()
+            except engine.Busy:
+                pass
+            except Exception:
+                log.exception("Falha na manutenção (%s)", name)

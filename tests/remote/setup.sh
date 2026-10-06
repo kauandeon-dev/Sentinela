@@ -39,13 +39,20 @@ mkdir -p "/etc/netns/$NS"
 printf '127.0.0.1 localhost db.interno\n::1 localhost\n' > "/etc/netns/$NS/hosts"
 
 # --------------------------------------------------------------- usuários
-for u in tunel restrito semforward sochave; do
+for u in tunel restrito semforward sochave cofre; do
     id "$u" >/dev/null 2>&1 || useradd -m -s /bin/bash "$u"
 done
 echo 'tunel:SenhaSsh#1'      | chpasswd
 echo 'semforward:SenhaSsh#1' | chpasswd
 echo 'sochave:SenhaSsh#1'    | chpasswd
 echo 'restrito:SenhaSsh#1'   | chpasswd
+echo 'cofre:CofreSftp#1'     | chpasswd
+
+# Destinos SFTP (cópias externas, regra 3-2-1): pasta do usuário "cofre" e um
+# volume minúsculo (256 KB) para simular disco cheio no servidor remoto.
+mkdir -p "$BASE/cheio"
+mountpoint -q "$BASE/cheio" || mount -t tmpfs -o size=256k tmpfs "$BASE/cheio"
+chown cofre "$BASE/cheio"
 
 # ------------------------------------------------------------------ chaves
 gen() {  # gen <nome> <tipo> [bits] [senha] [formato]
@@ -76,6 +83,7 @@ pub() { cat "$KEYS/$1.pub"; }
 auth tunel "$(pub ed25519)" "$(pub rsa)" "$(pub rsa_pem)" "$(pub ecdsa)" \
            "$(pub ed25519_senha)" "$(pub rsa_pem_senha)"
 auth sochave "$(pub ed25519)"
+auth cofre "$(pub ed25519)"
 auth semforward "$(pub ed25519)"
 # chave que só pode abrir túnel para o PostgreSQL
 auth restrito "restrict,port-forwarding,permitopen=\"localhost:5432\" $(pub ed25519)"
@@ -95,6 +103,7 @@ KbdInteractiveAuthentication no
 AllowTcpForwarding yes
 MaxStartups 50:30:100
 MaxSessions 50
+Subsystem sftp internal-sftp
 Match User semforward
     AllowTcpForwarding no
 Match User sochave

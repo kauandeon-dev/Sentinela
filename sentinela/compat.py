@@ -33,18 +33,18 @@ def private_dir(path):
         except OSError:
             pass
         return
-    user = os.environ.get("USERNAME")
-    if not user:
-        return
-    domain = os.environ.get("USERDOMAIN")
-    who = f"{domain}\\{user}" if domain else user
     # *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administradores (SIDs não dependem do idioma)
+    grants = ["/grant:r", "*S-1-5-18:(OI)(CI)F", "/grant:r", "*S-1-5-32-544:(OI)(CI)F"]
+    user = os.environ.get("USERNAME", "")
+    if user and not user.endswith("$"):  # "PC$" = rodando como SYSTEM (tarefa/serviço)
+        domain = os.environ.get("USERDOMAIN")
+        grants += ["/grant:r", f"{domain}\\{user}:(OI)(CI)F" if domain else f"{user}:(OI)(CI)F"]
     try:
-        subprocess.run(["icacls", path, "/inheritance:r",
-                        "/grant:r", f"{who}:(OI)(CI)F",
-                        "/grant:r", "*S-1-5-18:(OI)(CI)F",
-                        "/grant:r", "*S-1-5-32-544:(OI)(CI)F"],
-                       capture_output=True, timeout=30, check=False)
+        # Primeiro concede; só remove a herança se a concessão deu certo — assim
+        # um nome de conta inválido nunca deixa a pasta inacessível.
+        ok = subprocess.run(["icacls", path, *grants], capture_output=True, timeout=30).returncode == 0
+        if ok:
+            subprocess.run(["icacls", path, "/inheritance:r"], capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         pass
 

@@ -261,10 +261,108 @@ Níveis: `INFO` (etapa iniciada), `OK` (etapa concluída), `WARN` (atenção, ma
 
 ## 5. Instalação
 
-### 5.1 Requisitos
+Escolha um dos três jeitos:
 
-- **Linux** (testado em Ubuntu 24.04). Em macOS os requisitos são os mesmos via Homebrew, mas não foi
-  testado. No Windows, use o WSL.
+| Jeito | Para quem | Precisa instalar |
+|---|---|---|
+| [**Docker**](#51-docker--qualquer-sistema-o-mais-fácil) | Qualquer sistema; o mais simples de manter | Só o Docker (Docker Desktop no Windows/macOS) |
+| [**Windows**](#52-windows-sem-docker) | Servidor ou PC Windows 10/11 / Server 2019+ | Python e o PostgreSQL ou MariaDB (os clientes vêm junto) |
+| [**Linux**](#53-linux) | Servidor Linux | Python e os pacotes cliente do banco |
+
+Os três são testados automaticamente a cada alteração (GitHub Actions: Ubuntu, Windows com Python
+3.12 e 3.13, e a imagem Docker) — veja a [seção 16](#16-testes).
+
+### 5.1 Docker — qualquer sistema (o mais fácil)
+
+A imagem já traz o Python, o `pg_dump`/`psql` mais novo (funciona com servidores PostgreSQL
+antigos) e o `mariadb-dump`/`mariadb`. Funciona como um "executável": um clique para iniciar.
+
+1. Instale o **Docker Desktop** (Windows/macOS) ou o Docker Engine (Linux) e deixe-o aberto.
+2. Baixe o Sentinela (botão *Code → Download ZIP* no GitHub, ou `git clone`) e extraia numa pasta.
+3. **Windows:** dê dois cliques em **`iniciar.bat`**. **Linux/macOS:** `./iniciar.sh`.
+4. Na primeira vez a imagem é construída (alguns minutos). O script mostra a **senha do
+   `admin`** e abre `http://localhost:8080`.
+
+| Arquivo | Para quê |
+|---|---|
+| `iniciar.bat` / `iniciar.sh` | Constrói (se preciso), inicia e mostra a senha do primeiro acesso |
+| `parar.bat` (ou `docker compose stop`) | Para o Sentinela (as cópias e configurações ficam) |
+| `trocar-senha.bat` / `trocar-senha.sh` | Troca a senha do `admin` |
+
+Onde ficam as coisas (pastas ao lado do `docker-compose.yml`):
+
+| Pasta | Conteúdo |
+|---|---|
+| `dados/` | banco do Sentinela, **chave mestra** (`sentinela.key`) e logs |
+| `backups/` | cópias locais (no painel: `/backups`) |
+| `externo/` | destino "Outro disco" (no painel: `/externo`) |
+
+Dicas:
+
+- **Banco no mesmo computador:** na tela Conexão use o host **`host.docker.internal`** (não
+  `localhost`, que dentro do contêiner é o próprio contêiner). O banco precisa aceitar conexões
+  da rede do Docker (no PostgreSQL: `listen_addresses` e `pg_hba.conf`).
+- **Banco em outro servidor:** use o IP/nome dele, ou o túnel SSH normalmente.
+- **HD externo / NAS como destino 3-2-1:** no `docker-compose.yml`, troque `./externo` pelo caminho do
+  disco (ex.: `E:/SentinelaBackups:/externo` no Windows, `/mnt/hd:/externo` no Linux), rode o
+  `iniciar` de novo e cadastre o destino "Outro disco" com a pasta **`/externo`**.
+- **Fuso horário do agendamento:** `TZ` no `docker-compose.yml` (padrão `America/Sao_Paulo`).
+- **Painel na rede:** por padrão só este computador acessa (`127.0.0.1:8080`). Para liberar, troque
+  para `"8080:8080"` e publique atrás de HTTPS ([seção 5.3.3](#533-acesso-pela-rede-https)).
+- **Atualizar:** baixe a versão nova por cima e rode o `iniciar` de novo (as pastas são mantidas).
+- O contêiner reinicia sozinho com o Docker (`restart: unless-stopped`) e roda com usuário sem
+  privilégios.
+
+### 5.2 Windows (sem Docker)
+
+Testado em Windows Server 2022/2025 (o mesmo do Windows 10/11) com Python 3.12 e 3.13.
+
+1. **Python:** instale pelo [python.org](https://www.python.org/downloads/windows/) marcando
+   **"Add python.exe to PATH"**.
+2. **Clientes do banco:** instale o **PostgreSQL** (instalador da EDB — se o banco fica em outra
+   máquina, marque só *Command Line Tools*) e/ou o **MariaDB** (MSI do mariadb.org). **Não é
+   preciso mexer no PATH:** o Sentinela acha sozinho o `pg_dump`/`psql` em
+   `C:\Program Files\PostgreSQL\<versão>\bin` e o `mariadb-dump`/`mariadb` em
+   `C:\Program Files\MariaDB <versão>\bin` (usa a versão mais nova instalada). Em outro lugar,
+   informe o caminho em `SENTINELA_PG_DUMP`, `SENTINELA_PSQL`, `SENTINELA_MYSQLDUMP`, `SENTINELA_MYSQL`.
+3. **Sentinela** — no PowerShell, dentro da pasta extraída:
+
+   ```powershell
+   py -m venv .venv
+   .venv\Scripts\pip install -r requirements.txt
+   .venv\Scripts\python -m sentinela serve
+   ```
+
+   A janela mostra a senha do `admin`. Acesse `http://127.0.0.1:8080`. Os dados ficam em `.\data`
+   e as cópias em `C:\ProgramData\Sentinela\backups` (troque no painel, ex.: `E:\Backups`).
+4. **Iniciar junto com o Windows** (sem precisar de ninguém logado) — PowerShell **como
+   Administrador**, na pasta do Sentinela:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File deploy\windows\instalar-tarefa.ps1
+   ```
+
+   Cria a tarefa agendada **Sentinela** (conta SYSTEM, reinicia se cair) com os dados em
+   `C:\ProgramData\Sentinela\dados` e mostra a senha do primeiro acesso. Para trocar a senha:
+   `$env:SENTINELA_HOME="C:\ProgramData\Sentinela\dados"; .venv\Scripts\python -m sentinela passwd admin`.
+   Para remover: `Unregister-ScheduledTask -TaskName Sentinela -Confirm:$false`.
+
+Particularidades do Windows (tratadas pelo Sentinela):
+
+- **Permissões:** em vez de `chmod 700`, as pastas de dados e de cópias criadas pelo Sentinela
+  têm a herança removida e ficam acessíveis só ao usuário do serviço, ao SYSTEM e aos
+  Administradores (ACL via `icacls`).
+- **Caminhos** podem ser `E:\Backups` ou compartilhamentos `\\nas\backups` (o usuário da tarefa
+  precisa ter acesso ao compartilhamento).
+- O console do Windows é configurado para UTF-8, para os acentos e símbolos dos logs.
+- O agendamento usa o fuso do Windows; o PC precisa estar ligado à meia-noite (se não estiver,
+  o backup roda assim que ele ligar).
+
+### 5.3 Linux
+
+#### 5.3.1 Requisitos
+
+- **Linux** (testado em Ubuntu 24.04). macOS deve funcionar com os clientes do Homebrew.
 - **Python 3.10+**
 - **Clientes do banco** instalados na máquina do Sentinela:
 
@@ -276,7 +374,7 @@ Níveis: `INFO` (etapa iniciada), `OK` (etapa concluída), `WARN` (atenção, ma
 > A versão do `pg_dump` deve ser **igual ou mais nova** que a do servidor PostgreSQL. Use o
 > repositório oficial (apt.postgresql.org) se a versão da distribuição for antiga.
 
-### 5.2 Passo a passo
+#### 5.3.2 Passo a passo
 
 ```bash
 # 1. dependências do sistema
@@ -311,7 +409,7 @@ Saída do primeiro início:
 
 Acesse `http://127.0.0.1:8080` e siga o [guia de uso](#6-guia-de-uso--tela-por-tela).
 
-### 5.3 Como serviço (systemd)
+#### Como serviço (systemd)
 
 ```bash
 sudo cp deploy/sentinela.service /etc/systemd/system/
@@ -324,7 +422,7 @@ O arquivo [`deploy/sentinela.service`](deploy/sentinela.service) já vem com as 
 endurecimento (`ProtectSystem=strict`, `NoNewPrivileges`, `UMask=0077`). Se o diretório de backup
 for outro (ex.: um disco externo), inclua-o em `ReadWritePaths`.
 
-### 5.4 Acesso pela rede (HTTPS)
+#### 5.3.3 Acesso pela rede (HTTPS)
 
 O painel escuta só em `127.0.0.1`. Para acessar de outra máquina, publique atrás de um proxy com
 HTTPS e defina `SENTINELA_HTTPS=1`: o cookie de sessão passa a ser só HTTPS e o Sentinela confia no
@@ -806,7 +904,7 @@ seção 4.3) **e a chave**.
 
 ---
 
-## 14. Testes
+## 16. Testes
 
 ```bash
 pip install -r requirements-dev.txt       # pytest, moto (S3 falso) e aiosmtpd (SMTP falso)
@@ -953,8 +1051,10 @@ Endpoints (todos exigem sessão, exceto login):
 - Horários (agendamento e logs) usam o **fuso do servidor**.
 - A conferência das cópias externas **lê o arquivo de volta** pela rede: em links lentos ou bases
   grandes, o envio para a nuvem leva o dobro do tempo da transferência.
-- Testado em Linux. macOS deve funcionar com os clientes do Homebrew, mas não foi testado;
-  Windows apenas via WSL.
+- Testado em Linux, Windows e Docker. macOS deve funcionar (nativo ou Docker), mas não é testado
+  automaticamente.
+- No Windows, o destino "Outro disco" em compartilhamento de rede exige que a conta da tarefa
+  (SYSTEM) tenha acesso a ele; prefira uma conta de serviço dedicada nesse caso.
 
 ---
 

@@ -38,8 +38,13 @@ pytestmark = pytest.mark.skipif(not _remote_available(),
 # ----------------------------------------------------------------- utilidades
 
 def key(name):
-    with open(f"{KEYS}/{name}") as f:
-        return f.read()
+    # Lida também na coleta (parametrize): sem o ambiente remoto, devolve vazio
+    # e os testes são ignorados pelo skipif do módulo.
+    try:
+        with open(f"{KEYS}/{name}") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 def ssh_pw(user="tunel", password="SenhaSsh#1", **kw):

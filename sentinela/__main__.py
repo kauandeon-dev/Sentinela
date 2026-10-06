@@ -34,13 +34,15 @@ def cmd_serve(args):
     if storage.count_users() == 0:
         pw = secrets.token_urlsafe(12)
         storage.upsert_user("admin", generate_password_hash(pw))
+        # flush: com a saída redirecionada para arquivo (serviço, Docker, tarefa
+        # agendada do Windows) a senha precisa aparecer no log imediatamente.
         print("=" * 60)
         print(" Primeiro acesso: usuário 'admin'  senha:", pw)
         print(" Altere com: python -m sentinela passwd admin")
-        print("=" * 60)
+        print("=" * 60, flush=True)
     print(f" Chave mestra: {settings.KEY_PATH}")
     print("  -> guarde uma cópia FORA do servidor; sem ela as cópias")
-    print("     criptografadas não podem ser recuperadas.")
+    print("     criptografadas não podem ser recuperadas.", flush=True)
 
     Scheduler().start()
     app = create_app()

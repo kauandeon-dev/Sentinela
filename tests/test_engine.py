@@ -211,3 +211,75 @@ def test_mariadb_preflight_without_mysql_proc_table(env, monkeypatch):
     monkeypatch.setattr(a, "query", denied)
     warns, expected = a.preflight()
     assert expected == {} and "mysql.proc" in warns[0]
+
+
+def test_mysqldump_8_gets_column_statistics_off(env, monkeypatch, tmp_path):
+    """mysqldump do MySQL 8 contra MariaDB falha em COLUMN_STATISTICS: o Sentinela
+    desliga essa consulta; mariadb-dump não recebe a opção."""
+    from sentinela import dumpers
+    versions = {"/x/mysqldump": "mysqldump  Ver 8.0.39 for Win64 on x86_64 (MySQL Community Server - GPL)",
+                "/x/mariadb-dump": "mariadb-dump  Ver 10.19 Distrib 10.11.8-MariaDB, for Linux"}
+    monkeypatch.setattr(dumpers, "_tool_versions", dict(versions))
+    for tool, expected in (("/x/mysqldump", True), ("/x/mariadb-dump", False)):
+        monkeypatch.setattr(dumpers, "_which", lambda *a, _t=tool, **k: _t)
+        with dumpers.MariaDBAdapter(MARIA).dump_cmd() as (cmd, _):
+            assert ("--column-statistics=0" in cmd) is expected
+            assert cmd[-1] == "loja_producao"
+
+
+def test_which_prefers_first_name_over_path_fallback(env, monkeypatch, tmp_path):
+    """Com o MySQL no PATH e o MariaDB instalado (Windows), usa o mariadb-dump."""
+    from sentinela import compat, dumpers
+    monkeypatch.setattr(compat, "IS_WINDOWS", True)
+    monkeypatch.setattr(dumpers.shutil, "which",
+                        lambda n: "C:/MySQL/bin/mysqldump.exe" if n == "mysqldump" else None)
+    monkeypatch.setattr(dumpers, "_windows_candidates",
+                        lambda n: ["C:/Program Files/MariaDB 11.4/bin/mariadb-dump.exe"]
+                        if n == "mariadb-dump" else [])
+    assert dumpers._which("mariadb-dump", "mysqldump").endswith("mariadb-dump.exe")
+    monkeypatch.setenv("SENTINELA_MYSQLDUMP", "D:/meu/mysqldump.exe")
+    assert dumpers._which("mariadb-dump", "mysqldump", env="SENTINELA_MYSQLDUMP") == "D:/meu/mysqldump.exe"
+
+
+def test_windows_candidates_pick_newest_version(env, monkeypatch, tmp_path):
+    from sentinela import dumpers
+    for v in ("9.6", "16", "17", "12"):
+        d = tmp_path / "PostgreSQL" / v / "bin"
+        d.mkdir(parents=True)
+        (d / "pg_dump.exe").write_text("")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    monkeypatch.delenv("ProgramW6432", raising=False)
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    got = dumpers._windows_candidates("pg_dump")
+    assert [os.path.basename(os.path.dirname(os.path.dirname(p))) for p in got] == ["17", "16", "12", "9.6"]
+
+
+def test_key_and_backups_are_written_in_binary_mode(env, tmp_path):
+    """No Windows, os.open sem O_BINARY troca \\n por \\r\\n e corrompe a chave e as cópias."""
+    from sentinela import compat
+    p = tmp_path / "bin.dat"
+    data = bytes(range(256)) * 4
+    with os.fdopen(compat.open_private(p), "wb") as f:
+        f.write(data)
+    assert p.read_bytes() == data
+    if os.name == "nt":
+        assert compat.O_BINARY
+    k = env["engine"].key()
+    assert len(k) == 32 and (env["home"] / "sentinela.key").read_bytes() == k
+
+
+def test_lock_is_exclusive_between_handles(env, tmp_path):
+    from sentinela import compat
+    p = str(tmp_path / "trava")
+    a = os.open(p, os.O_CREAT | os.O_RDWR | compat.O_BINARY, 0o600)
+    b = os.open(p, os.O_CREAT | os.O_RDWR | compat.O_BINARY, 0o600)
+    try:
+        compat.lock_nb(a)
+        with pytest.raises(OSError):
+            compat.lock_nb(b)
+        compat.unlock(a)
+        compat.lock_nb(b)
+        compat.unlock(b)
+    finally:
+        os.close(a)
+        os.close(b)

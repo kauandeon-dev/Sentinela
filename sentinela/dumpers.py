@@ -41,14 +41,16 @@ def _windows_candidates(name):
 
 
 def _which(*names, env=None):
+    """Acha o cliente pelo nome preferido primeiro (``mariadb-dump`` antes de
+    ``mysqldump``), no PATH e, no Windows, nas pastas de instalação padrão — assim
+    um ``mysqldump`` do MySQL no PATH não é usado se o MariaDB estiver instalado."""
     if env and os.environ.get(env):
         return os.environ[env]
     for n in names:
         p = shutil.which(n)
         if p:
             return p
-    if compat.IS_WINDOWS:
-        for n in names:
+        if compat.IS_WINDOWS:
             c = _windows_candidates(n)
             if c:
                 return c[0]
@@ -167,10 +169,15 @@ class MariaDBAdapter(Adapter):
     @contextmanager
     def dump_cmd(self):
         with self._defaults_file() as cnf:
-            cmd = [_which("mariadb-dump", "mysqldump", env="SENTINELA_MYSQLDUMP"),
-                   f"--defaults-extra-file={cnf}", "--protocol=TCP",
+            tool = _which("mariadb-dump", "mysqldump", env="SENTINELA_MYSQLDUMP")
+            cmd = [tool, f"--defaults-extra-file={cnf}", "--protocol=TCP",
                    "--single-transaction", "--quick", "--routines", "--triggers",
-                   "--events", "--add-drop-table", "--hex-blob", self.dbname]
+                   "--events", "--add-drop-table", "--hex-blob"]
+            if _is_mysql8_dump(tool):
+                # O mysqldump do MySQL 8 consulta COLUMN_STATISTICS, que não existe
+                # no MariaDB nem em MySQL antigos: desliga essa consulta.
+                cmd.append("--column-statistics=0")
+            cmd.append(self.dbname)
             yield cmd, os.environ.copy()
 
     @contextmanager
@@ -206,6 +213,22 @@ class MariaDBAdapter(Adapter):
                 "mysql.proc. Rotinas criadas por outros usuários podem ficar fora da cópia. "
                 "Conceda: GRANT SELECT ON mysql.proc TO 'usuario'@'host'")
         return warnings, expected
+
+
+_tool_versions = {}
+
+
+def _is_mysql8_dump(tool):
+    if tool not in _tool_versions:
+        try:
+            out = subprocess.run([tool, "--version"], capture_output=True, text=True,
+                                 timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        _tool_versions[tool] = out
+    out = _tool_versions[tool]
+    m = re.search(r"Ver (\d+)\.", out) or re.search(r"Distrib (\d+)\.", out)
+    return "MariaDB" not in out and bool(m) and int(m.group(1)) >= 8
 
 
 def adapter_for(conn):

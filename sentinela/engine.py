@@ -1185,7 +1185,11 @@ def apply_retention(elog=None):
             if elog:
                 elog("WARN", f"Retenção: {b['id']} mantida por ser a cópia válida mais recente")
             continue
-        _remove_file(b)
+        try:
+            _remove_file(b)
+        except FileInUse as e:
+            (elog("WARN", f"Retenção: {e}") if elog else log.warning("Retenção: %s", e))
+            continue  # tenta de novo na próxima limpeza
         storage.execute("UPDATE backups SET deleted_at=? WHERE id=?", (iso(now()), b["id"]))
         _delete_replicas(b, elog)
         removed += 1
@@ -1243,12 +1247,28 @@ def check_late():
     return True
 
 
+class FileInUse(ValueError):
+    pass
+
+
 def _remove_file(b):
-    if b.get("path"):
+    """Apaga o arquivo da cópia. No Windows, um arquivo aberto (download em
+    andamento, antivírus lendo) não pode ser apagado: tenta por alguns segundos."""
+    if not b.get("path"):
+        return
+    for attempt in range(10):
         try:
             os.unlink(b["path"])
+            return
         except FileNotFoundError:
-            pass
+            return
+        except PermissionError:
+            if not compat.IS_WINDOWS:
+                raise
+            if attempt == 9:
+                raise FileInUse(f"O arquivo da cópia {b['id']} está em uso por outro programa "
+                                "(download em andamento ou antivírus). Tente de novo em instantes.")
+            time.sleep(0.3)
 
 
 def recover_interrupted():

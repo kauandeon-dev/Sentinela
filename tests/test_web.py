@@ -72,6 +72,7 @@ def test_full_flow(env):
         time.sleep(0.1)
     d = c.get(f"/api/backups/{bid}/download")
     assert d.status_code == 200 and d.data[:4] == b"SNTL"
+    d.close()  # libera o arquivo (no Windows, arquivo aberto não pode ser apagado)
     assert c.get("/api/logs").get_json()["executions"]
     assert c.get("/api/backups?filter=manual").get_json()["backups"][0]["id"] == bid
     assert c.delete(f"/api/backups/{bid}").status_code == 200

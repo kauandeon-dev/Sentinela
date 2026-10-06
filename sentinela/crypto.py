@@ -16,7 +16,7 @@ import os
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from . import settings
+from . import compat, settings
 
 MAGIC = b"SNTL"
 VERSION = 1
@@ -43,7 +43,7 @@ def load_or_create_key(path=None):
         return key
     path.parent.mkdir(parents=True, exist_ok=True)
     key = os.urandom(KEY_LEN)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = compat.open_private(path, exclusive=True)
     with os.fdopen(fd, "wb") as f:
         f.write(key)
     return key

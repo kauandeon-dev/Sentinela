@@ -1,6 +1,5 @@
 import importlib
 import os
-import shutil
 import subprocess
 import sys
 
@@ -33,19 +32,33 @@ def env(tmp_path, monkeypatch):
     return {"home": home, "backups": backups, "engine": e, "storage": st}
 
 
+def tool(*names):
+    """Acha um cliente do banco como o Sentinela acha (PATH ou, no Windows, as
+    pastas de instalação padrão). None se não houver."""
+    from sentinela import dumpers
+    try:
+        return dumpers._which(*names)
+    except dumpers.ToolNotFound:
+        return None
+
+
+PSQL = tool("psql")
+MARIADB = tool("mariadb", "mysql")
+
+
 def _pg_available():
-    if not shutil.which("pg_dump"):
+    if not tool("pg_dump") or not PSQL:
         return False
-    p = subprocess.run(["psql", "-h", "localhost", "-U", "backup_user", "-d", "loja_producao",
+    p = subprocess.run([PSQL, "-h", "localhost", "-U", "backup_user", "-d", "loja_producao",
                         "-w", "-tAc", "select 1"], env={**os.environ, "PGPASSWORD": "senha123"},
                        capture_output=True)
     return p.returncode == 0
 
 
 def _maria_available():
-    if not (shutil.which("mariadb-dump") or shutil.which("mysqldump")):
+    if not tool("mariadb-dump", "mysqldump") or not MARIADB:
         return False
-    p = subprocess.run(["mariadb", "-h", "127.0.0.1", "--protocol=TCP", "-u", "backup_user",
+    p = subprocess.run([MARIADB, "-h", "127.0.0.1", "--protocol=TCP", "-u", "backup_user",
                         "-ps3nh@\"x", "loja_producao", "-e", "select 1"], capture_output=True)
     return p.returncode == 0
 

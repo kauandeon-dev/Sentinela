@@ -1,0 +1,21 @@
+# Uso:  Windows → dê dois cliques em iniciar.bat   ·   Linux/macOS → ./iniciar.sh
+#       (ou: docker compose up -d --build)
+services:
+  sentinela:
+    build: .
+    image: sentinela:local
+    container_name: sentinela
+    restart: unless-stopped
+    ports:
+      # só este computador acessa o painel; para liberar na rede, troque por "8080:8080"
+      # (e publique atrás de HTTPS — veja o README)
+      - "127.0.0.1:8080:8080"
+    environment:
+      TZ: America/Sao_Paulo         # fuso do agendamento (meia-noite)
+    volumes:
+      - ./dados:/dados              # banco do Sentinela, chave mestra e logs
+      - ./backups:/backups          # cópias locais
+      - ./externo:/externo          # destino "Outro disco": aponte para o HD externo/NAS
+    extra_hosts:
+      # banco no próprio computador: use o host "host.docker.internal" na tela Conexão
+      - "host.docker.internal:host-gateway"

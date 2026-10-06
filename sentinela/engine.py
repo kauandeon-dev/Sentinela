@@ -7,7 +7,6 @@ Pipeline de backup (em fluxo, sem arquivos intermediários em texto claro):
 Cada execução gera um log detalhado (banco SQLite + arquivo em disco).
 """
 
-import fcntl
 import hashlib
 import logging
 import os
@@ -21,7 +20,7 @@ from datetime import datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from . import crypto, dumpers, settings, storage, tunnel
+from . import compat, crypto, dumpers, settings, storage, tunnel
 from .storage import iso, now
 
 log = logging.getLogger("sentinela")
@@ -197,7 +196,7 @@ def import_key(data):
         return kid, False
     settings.KEYRING_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     p = _keyring_path(kid)
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = compat.open_private(p)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     log.info("Chave mestra %s importada para o chaveiro", kid)
@@ -422,7 +421,10 @@ def validate_directory(path):
             raise ValueError(
                 f"O diretório de backup deve ficar isolado da aplicação (fora de {forbidden})")
     try:
+        new = not p.exists()
         p.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if new:
+            compat.private_dir(p)
     except OSError as e:
         raise ValueError(f"Não foi possível criar o diretório: {e.strerror}") from e
     if not os.access(p, os.W_OK):
@@ -513,11 +515,11 @@ def _acquire():
         raise Busy("Já existe uma execução em andamento. Aguarde a conclusão.")
     try:
         settings.ensure_dirs()
-        fd = os.open(settings.HOME / "sentinela.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fd = os.open(settings.HOME / "sentinela.lock", os.O_CREAT | os.O_RDWR | compat.O_BINARY, 0o600)
     except OSError:
         return  # sem arquivo de trava: segue só com a trava do processo
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        compat.lock_nb(fd)
     except OSError:
         os.close(fd)
         _release()
@@ -530,7 +532,7 @@ def _release():
     global _lock_fd
     if _lock_fd is not None:
         try:
-            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            compat.unlock(_lock_fd)
             os.close(_lock_fd)
         except OSError:
             pass
@@ -810,7 +812,7 @@ def _stream_dump(adapter, part, policy, elog=None):
     stats = {"raw": 0, "compressed": 0, "size": 0}
     tail = b""
 
-    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = compat.open_private(part)
     out = os.fdopen(fd, "wb")
 
     def write(data):

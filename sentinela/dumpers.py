@@ -4,13 +4,15 @@ Usam os clientes oficiais de linha de comando (pg_dump/psql e
 mariadb-dump/mariadb), que precisam estar instalados no servidor.
 """
 
+import glob
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
 
-from . import settings
+from . import compat, settings
 
 SGBD_LABEL = {"postgres": "PostgreSQL", "mariadb": "MariaDB (MySQL)"}
 DEFAULT_PORT = {"postgres": "5432", "mariadb": "3306"}
@@ -20,6 +22,24 @@ class ToolNotFound(Exception):
     pass
 
 
+# No Windows, os instaladores do PostgreSQL e do MariaDB/MySQL não colocam os
+# clientes no PATH: procuramos nas pastas padrão (a versão mais nova primeiro).
+_WINDOWS_DIRS = ("PostgreSQL/*/bin", "MariaDB */bin", "MySQL/MySQL Server */bin")
+
+
+def _version_key(path):
+    return [int(x) for x in re.findall(r"\d+", path)]
+
+
+def _windows_candidates(name):
+    roots = {os.environ.get(v) for v in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")}
+    found = []
+    for root in filter(None, roots):
+        for pattern in _WINDOWS_DIRS:
+            found += glob.glob(os.path.join(root, pattern, name + ".exe"))
+    return sorted(found, key=_version_key, reverse=True)
+
+
 def _which(*names, env=None):
     if env and os.environ.get(env):
         return os.environ[env]
@@ -27,9 +47,15 @@ def _which(*names, env=None):
         p = shutil.which(n)
         if p:
             return p
-    raise ToolNotFound(
-        f"Cliente '{names[0]}' não encontrado no servidor. Instale o pacote cliente do SGBD."
-    )
+    if compat.IS_WINDOWS:
+        for n in names:
+            c = _windows_candidates(n)
+            if c:
+                return c[0]
+    hint = ("Instale o PostgreSQL ou o MariaDB (os clientes vêm junto) ou informe o caminho "
+            "nas variáveis SENTINELA_PG_DUMP/SENTINELA_PSQL ou SENTINELA_MYSQLDUMP/SENTINELA_MYSQL."
+            if compat.IS_WINDOWS else "Instale o pacote cliente do SGBD.")
+    raise ToolNotFound(f"Cliente '{names[0]}' não encontrado no servidor. {hint}")
 
 
 class Adapter:

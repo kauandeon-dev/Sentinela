@@ -6,3 +6,6 @@ venv/
 data/
 *.key
 *.part
+dados/
+backups/
+externo/

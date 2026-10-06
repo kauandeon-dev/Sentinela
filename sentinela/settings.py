@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from . import compat
+
 # Diretório de dados da aplicação (banco SQLite, chave mestra, logs).
 # Deve ficar SEPARADO do diretório de backups.
 HOME = Path(os.environ.get("SENTINELA_HOME", Path.cwd() / "data")).resolve()
@@ -15,7 +17,11 @@ LOG_DIR = HOME / "logs"
 EXEC_LOG_DIR = LOG_DIR / "execucoes"
 MAIN_LOG = LOG_DIR / "sentinela.log"
 
-DEFAULT_BACKUP_DIR = os.environ.get("SENTINELA_BACKUP_DIR", "/var/backups/sentinela")
+if compat.IS_WINDOWS:
+    _DEFAULT_DIR = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "Sentinela", "backups")
+else:
+    _DEFAULT_DIR = "/var/backups/sentinela"
+DEFAULT_BACKUP_DIR = os.environ.get("SENTINELA_BACKUP_DIR", _DEFAULT_DIR)
 
 HOST = os.environ.get("SENTINELA_BIND", "127.0.0.1")
 PORT = int(os.environ.get("SENTINELA_PORT", "8080"))
@@ -50,9 +56,8 @@ EXEC_LOG_KEEP_DAYS = 90
 
 
 def ensure_dirs():
+    new = not HOME.exists()
     for d in (HOME, LOG_DIR, EXEC_LOG_DIR):
         d.mkdir(parents=True, exist_ok=True)
-    try:
-        os.chmod(HOME, 0o700)
-    except OSError:
-        pass
+    if new or not compat.IS_WINDOWS:
+        compat.private_dir(HOME)

@@ -19,7 +19,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import crypto, destinations as D, engine, notify, settings, storage
+from . import compat, crypto, destinations as D, engine, notify, settings, storage
 from .storage import iso, now
 
 log = engine.log
@@ -477,7 +477,7 @@ def fetch_local(elog, b):
         elog("INFO", f"Buscando a cópia em {d['name']} ({D.TYPES[d['type']]})")
         try:
             h = hashlib.sha256()
-            fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            fd = compat.open_private(part)
             with os.fdopen(fd, "wb") as out:
                 def sink(chunk):
                     out.write(chunk)

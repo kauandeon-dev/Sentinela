@@ -12,6 +12,7 @@
 """
 
 import argparse
+import os
 import getpass
 import secrets
 import sys
@@ -19,7 +20,7 @@ import zlib
 
 from werkzeug.security import generate_password_hash
 
-from . import __version__, crypto, engine, settings, storage
+from . import __version__, compat, crypto, engine, settings, storage
 
 
 def cmd_serve(args):
@@ -123,8 +124,10 @@ def cmd_key(args):
     elif args.action == "export":
         if not args.output:
             sys.exit("Informe o arquivo de saída: -o ARQUIVO.key")
-        import os
-        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fd = compat.open_private(args.output, exclusive=True)
+        except FileExistsError:
+            sys.exit(f"O arquivo {args.output} já existe")
         with os.fdopen(fd, "wb") as f:
             f.write(engine.key())
         storage.set_setting("key_exported_at", storage.iso(storage.now()))
@@ -179,6 +182,7 @@ def main():
     s.add_argument("-o", "--output", help="arquivo de saída (export)")
     s.set_defaults(fn=cmd_key)
 
+    compat.utf8_console()
     args = p.parse_args()
     args.fn(args)
 

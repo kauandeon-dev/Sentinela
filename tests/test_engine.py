@@ -1,10 +1,11 @@
 import os
 import subprocess
+import sys
 from datetime import timedelta
 
 import pytest
 
-from conftest import MARIA, PG, needs_maria, needs_pg
+from conftest import MARIA, MARIADB, PG, PSQL, needs_maria, needs_pg
 
 
 def _configure(env, conn, **policy):
@@ -16,14 +17,14 @@ def _configure(env, conn, **policy):
 
 def _psql(sql):
     return subprocess.run(
-        ["psql", "-h", "localhost", "-U", "backup_user", "-d", "loja_producao", "-w", "-tAc", sql],
+        [PSQL, "-h", "localhost", "-U", "backup_user", "-d", "loja_producao", "-w", "-tAc", sql],
         env={**os.environ, "PGPASSWORD": "senha123"}, capture_output=True, text=True, check=True,
     ).stdout.strip()
 
 
 def _maria(sql):
     return subprocess.run(
-        ["mariadb", "-h", "127.0.0.1", "--protocol=TCP", "-u", "backup_user", '-ps3nh@"x',
+        [MARIADB, "-h", "127.0.0.1", "--protocol=TCP", "-u", "backup_user", '-ps3nh@"x',
          "-N", "-B", "loja_producao", "-e", sql],
         capture_output=True, text=True, check=True,
     ).stdout.strip()
@@ -79,7 +80,8 @@ def test_pg_backup_and_verify(env, enc, comp):
     assert b["status"] == "success", b["error"]
     assert os.path.exists(b["path"])
     assert b["path"].endswith(".sql" + (".gz" if comp else "") + (".enc" if enc else ""))
-    assert oct(os.stat(b["path"]).st_mode & 0o777) == "0o600"
+    if os.name != "nt":  # no Windows a proteção é por ACL, não por modo
+        assert oct(os.stat(b["path"]).st_mode & 0o777) == "0o600"
     if comp:
         assert b["size"] < b["raw_size"]
     content = open(b["path"], "rb").read()
@@ -188,7 +190,7 @@ def test_decrypt_cli(env, tmp_path):
     e = _configure(env, PG)
     b = e.get_backup(e.start_backup("manual", wait=True))
     out = tmp_path / "rec.sql"
-    subprocess.run(["python3", "-m", "sentinela", "decrypt", b["path"], "-o", str(out)],
+    subprocess.run([sys.executable, "-m", "sentinela", "decrypt", b["path"], "-o", str(out)],
                    check=True, cwd=os.path.dirname(os.path.dirname(__file__)),
                    env={**os.environ})
     assert b"PostgreSQL database dump complete" in out.read_bytes()

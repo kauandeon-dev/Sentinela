@@ -24,7 +24,7 @@ from pathlib import Path
 
 import paramiko
 
-from . import settings, tunnel
+from . import compat, settings, tunnel
 
 TYPES = {"directory": "Outro disco", "sftp": "Servidor SFTP", "s3": "Armazenamento S3"}
 SECRETS = {"sftp": ("password", "private_key", "key_passphrase"), "s3": ("secret_key",)}
@@ -109,7 +109,10 @@ class DirectoryDriver(Driver):
     def open(self):
         self.root = Path(self.d["path"])
         try:
+            new = not self.root.exists()
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if new:
+                compat.private_dir(self.root)
         except OSError as e:
             raise DestinationError(_os_msg(e, f"Não foi possível acessar {self.root}")) from e
         if not os.access(self.root, os.W_OK):
@@ -138,7 +141,7 @@ class DirectoryDriver(Driver):
     def put_bytes(self, data, name):
         part = self._p(name + ".part")
         try:
-            fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            fd = compat.open_private(part)
             with os.fdopen(fd, "wb") as fo:
                 fo.write(data)
                 fo.flush()

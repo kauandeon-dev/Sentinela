@@ -1,0 +1,9 @@
+.git
+dados
+backups
+externo
+data
+tests
+docs
+**/__pycache__
+*.pyc

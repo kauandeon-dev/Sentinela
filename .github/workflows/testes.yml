@@ -1,0 +1,115 @@
+name: Testes
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Suíte completa em Linux e Windows, com PostgreSQL e MariaDB reais.
+  testes:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.12"]
+        include:
+          - os: windows-latest
+            python: "3.13"
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Dependências
+        run: python -m pip install -r requirements-dev.txt
+
+      # ---------------------------------------------------------------- Linux
+      - name: Bancos de teste (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -c "CREATE ROLE backup_user LOGIN PASSWORD 'senha123'"
+          sudo -u postgres psql -c "CREATE DATABASE loja_producao OWNER backup_user"
+          PGPASSWORD=senha123 psql -h localhost -U backup_user -d loja_producao -c \
+            "CREATE TABLE produtos(id serial primary key, nome text, preco numeric(10,2));
+             INSERT INTO produtos(nome,preco) SELECT 'Produto '||g, g*1.5 FROM generate_series(1,50000) g;"
+
+      # -------------------------------------------------------------- Windows
+      # Os clientes NÃO são colocados no PATH: o Sentinela deve achá-los sozinho
+      # nas pastas de instalação padrão (C:\Program Files\PostgreSQL\N\bin...).
+      - name: PostgreSQL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name "postgresql*" | Select-Object -First 1
+          Set-Service -InputObject $svc -StartupType Manual
+          Start-Service -InputObject $svc
+          $psql = Join-Path $env:PGBIN "psql.exe"
+          $env:PGPASSWORD = "root"
+          & $psql -U postgres -h localhost -c "CREATE ROLE backup_user LOGIN PASSWORD 'senha123'"
+          & $psql -U postgres -h localhost -c "CREATE DATABASE loja_producao OWNER backup_user"
+          $env:PGPASSWORD = "senha123"
+          & $psql -U backup_user -h localhost -d loja_producao -c "CREATE TABLE produtos(id serial primary key, nome text, preco numeric(10,2)); INSERT INTO produtos(nome,preco) SELECT 'Produto '||g, g*1.5 FROM generate_series(1,50000) g;"
+      - name: MariaDB (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          choco install mariadb -y --no-progress | Out-Null
+          $m = (Get-ChildItem "C:\Program Files\MariaDB*\bin\mariadb.exe" | Select-Object -First 1).FullName
+          & $m -uroot -e "CREATE DATABASE loja_producao; CREATE USER 'backup_user'@'%' IDENTIFIED BY 's3nh@`"x'; CREATE USER 'backup_user'@'localhost' IDENTIFIED BY 's3nh@`"x'; GRANT ALL ON loja_producao.* TO 'backup_user'@'%'; GRANT ALL ON loja_producao.* TO 'backup_user'@'localhost'; GRANT PROCESS ON *.* TO 'backup_user'@'localhost'; GRANT SELECT ON mysql.proc TO 'backup_user'@'localhost'; FLUSH PRIVILEGES;"
+          & $m -uroot --default-character-set=utf8mb4 loja_producao -e "CREATE TABLE clientes(id INT PRIMARY KEY AUTO_INCREMENT, nome VARCHAR(100), cidade VARCHAR(80)) DEFAULT CHARSET=utf8mb4; INSERT INTO clientes(nome,cidade) VALUES ('Ana','São Lourenço do Oeste'),('João','Chapecó');"
+
+      - name: Clientes do banco encontrados pelo Sentinela
+        run: python -c "from sentinela import dumpers as d; [print(n, '->', d._which(n)) for n in ('pg_dump','psql')]"
+      - name: Testes
+        run: python -m pytest -q -rs tests
+      - name: Teste de fumaça (painel rodando de verdade)
+        shell: bash
+        run: |
+          export SENTINELA_HOME="$RUNNER_TEMP/sentinela-home" SENTINELA_BACKUP_DIR="$RUNNER_TEMP/sentinela-backups"
+          python -m sentinela serve --port 8090 > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for i in $(seq 1 30); do grep -q "senha:" "$RUNNER_TEMP/serve.log" 2>/dev/null && break; sleep 1; done
+          cat "$RUNNER_TEMP/serve.log"
+          PW=$(grep -o "senha: .*" "$RUNNER_TEMP/serve.log" | cut -d' ' -f2 | tr -d '\r')
+          python tests/ci/smoke.py http://127.0.0.1:8090 admin "$PW" localhost "$RUNNER_TEMP/disco-externo"
+          python -m sentinela key id
+
+  # Imagem Docker: constrói, sobe com um PostgreSQL ao lado e faz o teste de fumaça.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir a imagem
+        run: docker build -t sentinela:ci .
+      - name: Subir PostgreSQL e Sentinela
+        run: |
+          docker network create rede
+          docker run -d --name banco --network rede -e POSTGRES_PASSWORD=pgadmin postgres:17
+          for i in $(seq 1 30); do docker exec banco pg_isready -U postgres && break; sleep 1; done
+          docker exec banco psql -U postgres -c "CREATE ROLE backup_user LOGIN PASSWORD 'senha123'"
+          docker exec banco psql -U postgres -c "CREATE DATABASE loja_producao OWNER backup_user"
+          docker exec -e PGPASSWORD=senha123 banco psql -h localhost -U backup_user -d loja_producao -c \
+            "CREATE TABLE produtos(id serial primary key, nome text); INSERT INTO produtos(nome) SELECT 'P'||g FROM generate_series(1,20000) g;"
+          mkdir -p dados backups externo   # pastas criadas como no iniciar.sh (dono: runner)
+          sudo chown root:root dados backups externo   # pior caso: pastas do root
+          docker run -d --name sentinela --network rede -p 127.0.0.1:8080:8080 \
+            -v "$PWD/dados:/dados" -v "$PWD/backups:/backups" -v "$PWD/externo:/externo" sentinela:ci
+          for i in $(seq 1 30); do docker logs sentinela 2>&1 | grep -q "senha:" && break; sleep 1; done
+          docker logs sentinela
+      - name: Teste de fumaça no contêiner
+        run: |
+          PW=$(docker logs sentinela 2>&1 | grep -o "senha: .*" | cut -d' ' -f2)
+          python3 tests/ci/smoke.py http://127.0.0.1:8080 admin "$PW" banco /externo
+          docker exec sentinela pg_dump --version
+          docker exec sentinela mariadb-dump --version
+          docker exec -u sentinela sentinela python -m sentinela key id
+          sudo ls -la dados backups externo
+          test "$(docker inspect -f '{{.State.Health.Status}}' sentinela)" != "unhealthy"

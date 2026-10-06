@@ -6,11 +6,12 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from datetime import timedelta
 
 import pytest
 
-from conftest import PG, SmtpSink, free_port, needs_pg
+from conftest import PG, PSQL, SmtpSink, free_port, needs_pg
 
 
 def _lines(env, eid):
@@ -62,8 +63,9 @@ def test_backup_is_replicated_verified_and_rule_321_met(env, s3, tmp_path):
     m = json.loads((disk / (name + ".json")).read_text())
     assert m["backup_id"] == bid and m["sha256"] == b["sha256"] and m["key_id"] == e.key_id()
     assert (disk / (name + ".sha256")).read_text() == f"{b['sha256']}  {name}\n"
-    assert subprocess.run(["sha256sum", "-c", name + ".sha256"], cwd=disk,
-                          capture_output=True).returncode == 0
+    if shutil.which("sha256sum"):
+        assert subprocess.run(["sha256sum", "-c", name + ".sha256"], cwd=disk,
+                              capture_output=True).returncode == 0
     # S3
     assert _sha(_s3_get(s3, name)) == b["sha256"]
     assert _s3_keys(s3) == sorted(f"sentinela/{name}{x}" for x in ("", ".json", ".sha256"))
@@ -121,7 +123,7 @@ def test_destination_validation(env, tmp_path):
 
 @pytest.fixture()
 def tiny_disk(tmp_path):
-    if os.geteuid() != 0:
+    if os.name == "nt" or os.geteuid() != 0:
         pytest.skip("precisa de root para montar um volume pequeno")
     p = tmp_path / "pendrive"
     p.mkdir()
@@ -206,7 +208,7 @@ def test_test_destination_reports_errors(env, s3):
 
 def _psql(sql):
     return subprocess.run(
-        ["psql", "-h", "localhost", "-U", "backup_user", "-d", "loja_producao", "-w", "-tAc", sql],
+        [PSQL, "-h", "localhost", "-U", "backup_user", "-d", "loja_producao", "-w", "-tAc", sql],
         env={**os.environ, "PGPASSWORD": "senha123"}, capture_output=True, text=True, check=True,
     ).stdout.strip()
 
@@ -378,7 +380,7 @@ def test_cli_sync_and_key(env, s3, tmp_path):
     e.start_backup("manual", wait=True)  # sem destinos
     replication.save_destination(s3["dest"])
     root = os.path.dirname(os.path.dirname(__file__))
-    run = lambda *a: subprocess.run(["python3", "-m", "sentinela", *a], cwd=root,  # noqa: E731
+    run = lambda *a: subprocess.run([sys.executable, "-m", "sentinela", *a], cwd=root,  # noqa: E731
                                     capture_output=True, text=True, env={**os.environ})
     r = run("sync")
     assert r.returncode == 0 and "concluída" in r.stdout, r.stdout + r.stderr
@@ -387,7 +389,8 @@ def test_cli_sync_and_key(env, s3, tmp_path):
     out = tmp_path / "chave.key"
     r = run("key", "export", "-o", str(out))
     assert r.returncode == 0 and out.read_bytes() == e.key()
-    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    if os.name != "nt":
+        assert oct(out.stat().st_mode & 0o777) == "0o600"
     assert run("key", "id").stdout.strip() == e.key_id()
     assert "já é a chave atual" in run("key", "import", str(out)).stdout
 

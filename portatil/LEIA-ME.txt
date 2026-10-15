@@ -1,0 +1,50 @@
+SENTINELA — VERSÃO PORTÁTIL PARA WINDOWS
+========================================
+
+Não precisa instalar nada, nem ser administrador, nem ter Docker.
+Funciona no Windows 10 e 11 (64 bits), inclusive em computadores fracos.
+
+COMO USAR
+---------
+1. Clique com o botão direito no ZIP > Propriedades > marque "Desbloquear" > OK.
+   (evita o aviso do Windows ao abrir os atalhos)
+2. Botão direito no ZIP > Extrair Tudo... e escolha a Área de Trabalho.
+   Não abra os arquivos de dentro do ZIP sem extrair.
+3. Dê dois cliques em um dos atalhos:
+
+   Sentinela-Demo.bat  -> APRESENTAÇÃO: sobe junto um banco PostgreSQL de
+                          exemplo (loja com clientes, produtos e 20 mil pedidos)
+                          e já deixa o Sentinela conectado nele.
+   Sentinela.bat       -> uso normal: você configura a conexão com o seu banco
+                          na tela Conexão.
+   Trocar-Senha.bat    -> troca a senha do usuário admin.
+
+4. O navegador abre sozinho no painel. Usuário: admin
+   A senha aparece na janela preta na primeira vez (anote!).
+5. Deixe a janela preta aberta enquanto usa. Para encerrar, feche a janela.
+
+Se o Windows mostrar "O Windows protegeu o computador":
+clique em "Mais informações" > "Executar assim mesmo".
+
+ONDE FICAM AS COISAS
+--------------------
+  dados\      configurações, chave mestra (sentinela.key) e logs
+  backups\    as cópias do banco
+  O banco de demonstração fica em %LOCALAPPDATA%\SentinelaDemo
+  (pode apagar essa pasta para recomeçar a demonstração do zero).
+
+DADOS DO BANCO DE DEMONSTRAÇÃO
+------------------------------
+  PostgreSQL · host 127.0.0.1 · porta 5433 · banco loja_demo
+  usuário backup_user · senha demo123
+
+DICAS
+-----
+- Rodando de um pendrive funciona, mas é mais lento: prefira copiar a pasta
+  para a Área de Trabalho.
+- Se a porta 8080 estiver ocupada, o Sentinela usa a próxima livre (8081...).
+  O endereço certo aparece na janela preta.
+- Para conectar num MariaDB/MySQL, os clientes já vêm em ferramentas\mariadb.
+- Os backups automáticos só acontecem com a janela aberta (o computador
+  precisa estar ligado à meia-noite). Para um servidor de verdade, veja o
+  README: instalação como tarefa do Windows ou Docker.

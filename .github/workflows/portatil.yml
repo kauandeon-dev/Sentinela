@@ -1,0 +1,89 @@
+name: Versão portátil (Windows)
+
+# Monta o Sentinela portátil (Python embutido + PostgreSQL/MariaDB portáteis),
+# valida num Windows "limpo" (sem PostgreSQL instalado, pasta com espaço e
+# acento) e publica o ZIP na página de Releases do repositório.
+on:
+  push:
+    branches: [main, teste-windows]
+  workflow_dispatch:
+
+jobs:
+  construir:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Clientes do MariaDB (para copiar mariadb e mariadb-dump)
+        shell: pwsh
+        run: choco install mariadb -y --no-progress | Out-Null
+      - name: Montar a pasta portátil
+        shell: pwsh
+        run: ./portatil/montar.ps1 -Saida "$env:RUNNER_TEMP\pacote\Sentinela"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sentinela-Portatil-Windows
+          path: ${{ runner.temp }}/pacote/Sentinela-Portatil-Windows.zip
+          compression-level: 0
+
+  validar:
+    needs: construir
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6   # só para rodar o roteiro de validação
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sentinela-Portatil-Windows
+      - name: Simular PC sem PostgreSQL instalado
+        shell: pwsh
+        run: |
+          Get-Service -Name "postgresql*" | Stop-Service -ErrorAction SilentlyContinue
+          Rename-Item "C:\Program Files\PostgreSQL" "PostgreSQL-removido"
+          if (Get-Command pg_dump -ErrorAction SilentlyContinue) { throw "pg_dump ainda no PATH" }
+      - name: Extrair numa pasta com espaço e acento
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "C:\Teste Portátil" | Out-Null
+          Expand-Archive Sentinela-Portatil-Windows.zip "C:\Teste Portátil" -Force
+          Get-ChildItem "C:\Teste Portátil\Sentinela"
+      - name: Validar como um usuário (dois cliques no Sentinela-Demo.bat)
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+        run: python tests/ci/validar_portatil.py "C:\Teste Portátil\Sentinela"
+
+  publicar:
+    needs: validar
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sentinela-Portatil-Windows
+      - name: Publicar em Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="portatil-${GITHUB_REF_NAME}"
+          gh release delete "$TAG" --cleanup-tag -y 2>/dev/null || true
+          PRE=""; [ "$GITHUB_REF_NAME" != "main" ] && PRE="--prerelease"
+          gh release create "$TAG" Sentinela-Portatil-Windows.zip --target "$GITHUB_SHA" $PRE \
+            --title "Sentinela portátil para Windows ($GITHUB_REF_NAME)" \
+            --notes "Versão portátil: não precisa instalar nada, nem Docker, nem ser administrador.
+
+          1. Baixe **Sentinela-Portatil-Windows.zip**, clique com o botão direito > Propriedades > Desbloquear.
+          2. Extraia (botão direito > Extrair Tudo) na Área de Trabalho.
+          3. Dois cliques em **Sentinela-Demo.bat** (apresentação, com banco de exemplo) ou **Sentinela.bat**.
+
+          Requer Windows 10/11 64 bits. Validado automaticamente num Windows sem PostgreSQL nem Python instalados.
+          Commit: ${GITHUB_SHA}"

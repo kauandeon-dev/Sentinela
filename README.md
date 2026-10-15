@@ -261,16 +261,58 @@ Níveis: `INFO` (etapa iniciada), `OK` (etapa concluída), `WARN` (atenção, ma
 
 ## 5. Instalação
 
-Escolha um dos três jeitos:
+Escolha um dos jeitos:
 
 | Jeito | Para quem | Precisa instalar |
 |---|---|---|
+| [**Portátil (Windows)**](#50-versão-portátil-para-windows--sem-instalar-nada) | Computador fraco, de laboratório/escola, sem Docker e sem ser administrador; apresentações | **Nada** — baixar o ZIP e dar dois cliques |
 | [**Docker**](#51-docker--qualquer-sistema-o-mais-fácil) | Qualquer sistema; o mais simples de manter | Só o Docker (Docker Desktop no Windows/macOS) |
 | [**Windows**](#52-windows-sem-docker) | Servidor ou PC Windows 10/11 / Server 2019+ | Python e o PostgreSQL ou MariaDB (os clientes vêm junto) |
 | [**Linux**](#53-linux) | Servidor Linux | Python e os pacotes cliente do banco |
 
 Os três são testados automaticamente a cada alteração (GitHub Actions: Ubuntu, Windows com Python
 3.12 e 3.13, e a imagem Docker) — veja a [seção 16](#16-testes).
+
+### 5.0 Versão portátil para Windows — sem instalar nada
+
+Para computadores fracos ou de laboratório, onde o Docker não roda (ele exige virtualização e
+pelo menos 4 GB de RAM) e não dá para instalar programas. A pasta portátil traz **tudo junto**:
+Python oficial embutido, o Sentinela, o `pg_dump`/`psql` do PostgreSQL 17, o
+`mariadb-dump`/`mariadb` e o runtime do Visual C++. Não precisa de administrador, não mexe no
+sistema e roda até de pendrive. Usa por volta de 100 MB de RAM.
+
+**Baixar:** página [Releases](https://github.com/kauandeon-dev/Sentinela/releases) →
+**Sentinela-Portatil-Windows.zip** (≈ 73 MB). Requer Windows 10 ou 11, 64 bits.
+
+1. Botão direito no ZIP → *Propriedades* → marque **Desbloquear** → OK (evita o aviso do Windows).
+2. Botão direito → *Extrair Tudo…* → Área de Trabalho. **Não rode de dentro do ZIP.**
+3. Dois cliques em um atalho:
+
+| Atalho | O que faz |
+|---|---|
+| **`Sentinela-Demo.bat`** | **Para apresentar:** sobe junto um PostgreSQL portátil com uma loja de exemplo (500 clientes, 200 produtos, 20 mil pedidos, uma view e uma função) e já deixa o Sentinela conectado nele |
+| **`Sentinela.bat`** | Uso normal: configure a conexão com o seu banco na tela Conexão |
+| **`Trocar-Senha.bat`** | Troca a senha do `admin` |
+
+4. O navegador abre sozinho. Usuário `admin`; a senha aparece na janela preta na primeira vez.
+   Deixe a janela aberta enquanto usa; para encerrar, feche-a (o banco de demonstração é desligado
+   junto).
+
+Detalhes:
+
+| | |
+|---|---|
+| Dados e cópias | `dados\` e `backups\` dentro da própria pasta |
+| Porta | 8080 ou a próxima livre (o endereço aparece na janela) |
+| Banco de demonstração | PostgreSQL · `127.0.0.1:5433` · banco `loja_demo` · usuário `backup_user` · senha `demo123`. Os arquivos ficam em `%LOCALAPPDATA%\SentinelaDemo` — ou, se o nome do usuário tiver acento, em `C:\ProgramData\SentinelaDemo` (o PostgreSQL não funciona em caminhos com acento no Windows; o Sentinela escolhe sozinho). Apague a pasta para recomeçar a demonstração do zero |
+| Aviso "O Windows protegeu o computador" | *Mais informações* → *Executar assim mesmo* (ou desbloqueie o ZIP antes de extrair) |
+| Backups automáticos | Só acontecem com a janela aberta. Para um servidor que fica sempre ligado, use a [tarefa do Windows](#52-windows-sem-docker) ou o Docker |
+
+O pacote é montado pelo [`portatil/montar.ps1`](portatil/montar.ps1) e, a cada alteração, o
+GitHub Actions o **testa num Windows sem PostgreSQL e sem Python instalados**, numa pasta com
+espaço e acento e simulando um aluno com acento no nome de usuário: abre o `Sentinela-Demo.bat`,
+faz backup, cópia externa, verificação e restauração pelo painel, confere que o PostgreSQL é
+desligado ao encerrar e que a segunda abertura reaproveita tudo — e só então publica o ZIP.
 
 ### 5.1 Docker — qualquer sistema (o mais fácil)
 
@@ -925,6 +967,7 @@ O workflow [`.github/workflows/testes.yml`](.github/workflows/testes.yml) roda s
 | **Windows** · Python 3.12 e 3.13 | Suíte completa com PostgreSQL 17 e MariaDB reais, **sem** os clientes no PATH (prova a busca automática em `C:\Program Files`), e um teste de fumaça com o painel rodando de verdade: login, conexão, backup, cópia externa, verificação e restauração |
 | **Ubuntu** · Python 3.12 | Suíte completa com PostgreSQL + o mesmo teste de fumaça |
 | **Docker** | Constrói a imagem, sobe ao lado de um PostgreSQL 17 com pastas montadas pertencentes ao root (pior caso) e roda o teste de fumaça dentro do contêiner |
+| **Versão portátil** ([`portatil.yml`](.github/workflows/portatil.yml)) | Monta o ZIP no Windows, extrai num Windows **sem PostgreSQL e sem Python**, em `C:\Teste Portátil`, com o perfil do usuário em `C:\Usuários\João`, e valida o `Sentinela-Demo.bat` de ponta a ponta; se passar, publica em Releases |
 
 Os testes de SSH/SFTP usam o servidor simulado abaixo (namespace de rede Linux) e rodam no
 ambiente de desenvolvimento; no Windows eles são ignorados.
@@ -938,6 +981,8 @@ Problemas que essa bateria encontrou no Windows e que foram corrigidos:
 | Arquivo em uso (download em andamento, antivírus) não pode ser apagado | Exclusão/retenção tentam de novo e explicam o motivo |
 | Instaladores não põem o `pg_dump` no PATH; e um `mysqldump` do MySQL 8 no PATH quebrava o dump do MariaDB (`COLUMN_STATISTICS`) | Busca nas pastas padrão priorizando `mariadb-dump`; `mysqldump` 8 recebe `--column-statistics=0` |
 | Senha do primeiro acesso não aparecia no log do serviço | Escrita imediata no log |
+| PostgreSQL não cria/inicia o banco em pasta com acento (`invalid byte sequence for encoding "UTF8"`) | Versão portátil usa uma pasta sem acento para o banco de demonstração |
+| `pg_ctl start` chamado pelo Python travava (o `postgres` herdava o pipe de saída) | Saída do `pg_ctl` não é capturada; erros vêm do log do servidor |
 | Console em cp1252 quebrava acentos e símbolos dos logs | Console em UTF-8 |
 
 Os testes de integração usam **bancos e servidores SSH reais**. Sem eles, são ignorados
@@ -1046,6 +1091,7 @@ tests/             unitários e integração (bancos e SSH reais) + tests/remote
 deploy/            serviço systemd (Linux) e tarefa agendada (deploy/windows)
 Dockerfile, docker-compose.yml, docker/   imagem Docker
 iniciar.bat/.sh, parar.bat, trocar-senha.*  atalhos de um clique para o Docker
+portatil/          versão portátil para Windows (inicializador, atalhos, banco de demonstração, montagem)
 .github/workflows/ testes automáticos (Windows, Ubuntu e Docker)
 docs/img/          capturas de tela
 ```

@@ -21,6 +21,7 @@ import argparse
 import atexit
 import glob
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -104,14 +105,59 @@ def pg_bin():
                      f"{TOOLS / 'pgsql' / 'bin'}. Baixe de novo a versão portátil completa.")
 
 
+def _writable(path):
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".teste-escrita"
+        probe.write_text("ok", encoding="ascii")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def demo_dir():
-    """Dados do banco de demonstração. No Windows ficam em %LOCALAPPDATA% (disco
-    local NTFS): o PostgreSQL não funciona bem em pendrive FAT32/exFAT."""
+    """Pasta do banco de demonstração.
+
+    No Windows, o PostgreSQL não funciona em caminhos com acento (ex.:
+    C:\\Users\\João): a criação do banco falha com "invalid byte sequence for
+    encoding UTF8". Por isso usamos a primeira pasta SEM acento e gravável entre
+    %LOCALAPPDATA%, %ProgramData% e %PUBLIC% — sempre num disco local NTFS (o
+    PostgreSQL também não funciona bem em pendrive FAT32/exFAT)."""
     if os.environ.get("SENTINELA_DEMO_DIR"):
         return Path(os.environ["SENTINELA_DEMO_DIR"])
-    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
-        return Path(os.environ["LOCALAPPDATA"]) / "SentinelaDemo"
-    return ROOT / "demo"
+    if os.name != "nt":
+        return ROOT / "demo"
+    for var in ("LOCALAPPDATA", "PROGRAMDATA", "PUBLIC"):
+        base = os.environ.get(var)
+        if base and base.isascii() and _writable(Path(base) / "SentinelaDemo"):
+            return Path(base) / "SentinelaDemo"
+    fallback = Path(os.environ.get("SystemDrive", "C:") + "\\") / "SentinelaDemo"
+    if _writable(fallback):
+        return fallback
+    raise SystemExit("Não encontrei uma pasta sem acento e com permissão de escrita para o banco "
+                     "de demonstração. Defina SENTINELA_DEMO_DIR (ex.: D:\\SentinelaDemo).")
+
+
+def ascii_pg_bin(binp, base):
+    """Se a pasta portátil tem acento, copia o PostgreSQL (uma vez) para a pasta
+    da demonstração, que é sem acento — senão o servidor não inicia no Windows."""
+    if os.name != "nt" or str(binp).isascii():
+        return binp
+    src = binp.parent
+    dest = base / "pgsql"
+    stamp = dest / "versao.txt"
+    version = subprocess.run([str(binp / f"pg_ctl{EXE}"), "--version"], capture_output=True,
+                             text=True).stdout.strip()
+    if not stamp.exists() or stamp.read_text(encoding="utf-8", errors="replace") != version:
+        say("A pasta tem acento no nome: copiando o PostgreSQL da demonstração para "
+            f"{dest} (só na primeira vez)...")
+        if dest.exists():
+            shutil.rmtree(dest, ignore_errors=True)
+        for part in ("bin", "lib", "share"):
+            shutil.copytree(src / part, dest / part)
+        stamp.write_text(version, encoding="utf-8")
+    return dest / "bin"
 
 
 def _psql(binp, sql=None, file=None, db="postgres"):
@@ -126,11 +172,11 @@ def _psql(binp, sql=None, file=None, db="postgres"):
 
 
 def start_demo():
-    binp = pg_bin()
     base = demo_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    binp = ascii_pg_bin(pg_bin(), base)
     data = base / "banco"
     log = base / "banco.log"
-    base.mkdir(parents=True, exist_ok=True)
 
     if not (data / "PG_VERSION").exists():
         say("Criando o banco de demonstração (só na primeira vez, leva alguns segundos)...")
@@ -256,6 +302,7 @@ def main():
         say(" Banco de demonstração pronto:")
         say(f"   PostgreSQL · host {c['host']} · porta {c['port']} · banco {c['dbname']}")
         say(f"   usuário {c['user']} · senha {c['password']}")
+        say(f"   arquivos do banco: {demo_dir() / 'banco'}")
         configure_demo_connection()
 
     port = int(os.environ.get("SENTINELA_PORT") or free_port())

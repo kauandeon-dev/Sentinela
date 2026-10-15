@@ -39,8 +39,12 @@ r = subprocess.run([str(py), "-c", "import sys, sentinela, cryptography, paramik
                     "print(sys.version.split()[0], sys.executable)"], capture_output=True, text=True)
 check(r.returncode == 0, f"Python embutido com as bibliotecas: {r.stdout.strip() or r.stderr.strip()}")
 
-# "Dois cliques" em Sentinela-Demo.bat (saída da janela vai para um arquivo)
-env = dict(os.environ, SENTINELA_NO_BROWSER="1")
+# "Dois cliques" em Sentinela-Demo.bat (saída da janela vai para um arquivo).
+# Simula também um aluno com acento no nome de usuário (C:\Users\João...): a
+# pasta do usuário não pode ser usada pelo PostgreSQL.
+fake_profile = Path("C:/Usuários/João/AppData/Local")
+fake_profile.mkdir(parents=True, exist_ok=True)
+env = dict(os.environ, SENTINELA_NO_BROWSER="1", LOCALAPPDATA=str(fake_profile))
 out = open(log, "w", encoding="utf-8")
 proc = subprocess.Popen(["cmd", "/c", str(root / "Sentinela-Demo.bat")], cwd=str(root), env=env,
                         stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -56,6 +60,9 @@ pw = re.search(r"senha: (\S+)", text).group(1)
 url = re.search(r"Painel: (http://\S+?)/?\s", text).group(1)
 check("Banco de demonstração pronto" in text, "banco de demonstração criado e carregado")
 check(str(root / "dados") in text, "dados gravados dentro da pasta portátil")
+demo = Path(re.search(r"arquivos do banco: (.+)", text).group(1).strip())
+check(str(demo).isascii(), f"banco da demonstração numa pasta sem acento: {demo}")
+check("copiando o PostgreSQL" in text, "PostgreSQL copiado para pasta sem acento (pasta portátil tem acento)")
 
 r = subprocess.run([sys.executable, str(here / "smoke.py"), url, "admin", pw, "127.0.0.1",
                     str(root.parent / "disco-externo"), "5433", "loja_demo", "backup_user", "demo123"])
@@ -69,8 +76,7 @@ check(len(key) == 32, "chave mestra íntegra (32 bytes, gravada em modo binário
 # Encerrar com Ctrl+Break (como Ctrl+C na janela) deve desligar também o
 # PostgreSQL da demonstração
 import signal  # noqa: E402
-demo = Path(os.environ["LOCALAPPDATA"]) / "SentinelaDemo" / "banco"
-pg_ctl = root / "ferramentas" / "pgsql" / "bin" / "pg_ctl.exe"
+pg_ctl = demo.parent / "pgsql" / "bin" / "pg_ctl.exe"
 
 
 def pg_running():

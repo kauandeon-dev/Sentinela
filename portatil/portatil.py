@@ -200,9 +200,11 @@ def start_demo():
         if os.name != "nt":
             opts += f" -c unix_socket_directories='{base}'"
         say(f"Iniciando o PostgreSQL de demonstração (porta {DEMO_PORT})...")
+        # Sem capture_output: no Windows o postgres herdaria o pipe de saída e o
+        # pg_ctl nunca "terminaria" para o Python. A saída do servidor vai para o log.
         r = subprocess.run([pg_ctl, "start", "-D", str(data), "-l", str(log), "-w", "-t", "90",
-                            "-o", opts], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
+                            "-o", opts], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
         if r.returncode:
             tail = ""
             try:
@@ -223,7 +225,7 @@ def start_demo():
 
 def stop_demo(pg_ctl, data):
     subprocess.run([pg_ctl, "stop", "-D", str(data), "-m", "fast", "-w", "-t", "20"],
-                   capture_output=True)
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 _console_handler = None  # referência mantida viva para o Windows chamar

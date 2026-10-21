@@ -88,13 +88,11 @@ def _read_header(f):
     return head[len(HEADER):]
 
 
-def decrypt_stream(src_path, key, sink=None):
-    """Descriptografa ``src_path`` enviando o texto claro para ``sink(bytes)``.
+def decrypt_chunks(src_path, key):
+    """Gera o texto claro de ``src_path`` em blocos.
 
-    ATENÇÃO: os dados só estão autenticados quando a função retorna sem erro.
-    Para restaurar, primeiro rode com ``sink=None`` (verificação) e só depois
-    envie os dados ao destino.
-    """
+    ATENÇÃO: os dados só estão autenticados quando o gerador termina sem erro
+    (a tag GCM é conferida no fim). Para restaurar, verifique antes."""
     size = os.path.getsize(src_path)
     with open(src_path, "rb") as f:
         nonce = _read_header(f)
@@ -114,13 +112,25 @@ def decrypt_stream(src_path, key, sink=None):
                 raise IntegrityError("Arquivo truncado")
             remaining -= len(chunk)
             out = dec.update(chunk)
-            if sink and out:
-                sink(out)
+            if out:
+                yield out
         try:
             out = dec.finalize()
         except Exception as e:  # InvalidTag
             raise IntegrityError("Falha na autenticação (arquivo adulterado ou chave incorreta)") from e
-        if sink and out:
+        if out:
+            yield out
+
+
+def decrypt_stream(src_path, key, sink=None):
+    """Descriptografa ``src_path`` enviando o texto claro para ``sink(bytes)``.
+
+    ATENÇÃO: os dados só estão autenticados quando a função retorna sem erro.
+    Para restaurar, primeiro rode com ``sink=None`` (verificação) e só depois
+    envie os dados ao destino.
+    """
+    for out in decrypt_chunks(src_path, key):
+        if sink:
             sink(out)
 
 

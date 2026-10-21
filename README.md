@@ -293,6 +293,7 @@ sistema e roda até de pendrive. Usa por volta de 100 MB de RAM.
 | **`Sentinela-Demo.bat`** | **Para apresentar:** sobe junto um PostgreSQL portátil com uma loja de exemplo (500 clientes, 200 produtos, 20 mil pedidos, uma view e uma função) e já deixa o Sentinela conectado nele |
 | **`Sentinela.bat`** | Uso normal: configure a conexão com o seu banco na tela Conexão |
 | **`Trocar-Senha.bat`** | Troca a senha do `admin` |
+| **`Descriptografar.bat`** | **Arraste** uma ou mais cópias (`.sql.gz.enc`) para cima dele: o `.sql` sem criptografia sai ao lado de cada uma. Com dois cliques (sem arrastar), recupera a cópia mais recente de cada banco |
 
 4. O navegador abre sozinho. Usuário `admin`; a senha aparece na janela preta na primeira vez.
    Deixe a janela aberta enquanto usa; para encerrar, feche-a (o banco de demonstração é desligado
@@ -312,7 +313,8 @@ O pacote é montado pelo [`portatil/montar.ps1`](portatil/montar.ps1) e, a cada 
 GitHub Actions o **testa num Windows sem PostgreSQL e sem Python instalados**, numa pasta com
 espaço e acento e simulando um aluno com acento no nome de usuário: abre o `Sentinela-Demo.bat`,
 faz backup, cópia externa, verificação e restauração pelo painel, confere que o PostgreSQL é
-desligado ao encerrar e que a segunda abertura reaproveita tudo — e só então publica o ZIP.
+desligado ao encerrar, que o `Descriptografar.bat` devolve o SQL completo e que a segunda abertura
+reaproveita tudo — e só então publica o ZIP.
 
 ### 5.1 Docker — qualquer sistema (o mais fácil)
 
@@ -516,6 +518,8 @@ usuário): `python -m sentinela passwd admin`. Após 5 tentativas erradas o logi
   e fora do local (regra 3-2-1) são configuradas em **Cópias externas** ([seção 9](#9-cópias-externas-e-a-regra-3-2-1)).
 - **Criptografia (AES-256)** e **Compressão (gzip)**: ligadas por padrão. Desligar a criptografia
   deixa as cópias legíveis por qualquer um com acesso à pasta — o checklist passa a acusar isso.
+  Só vale para as **próximas** cópias (`.sql.gz`, ou `.sql` sem compressão); para tirar a
+  criptografia de uma cópia que já existe, use **Baixar SQL** no detalhe dela.
 
 ### 6.4 Painel
 
@@ -543,8 +547,12 @@ Clique numa linha para abrir o **detalhe**:
 - **Restaurar este backup:** substitui o banco atual pela cópia (com confirmação). Antes, o Sentinela
   verifica a cópia e faz um backup do estado atual. Você é levado ao terminal para acompanhar.
 - **Verificar integridade:** relê a cópia por completo (seção 4.4).
-- **Baixar cópia:** baixa o arquivo como está (criptografado). Para lê-lo fora do painel, use
-  `python -m sentinela decrypt`.
+- **Baixar cópia (criptografada):** baixa o arquivo como está — o certo para guardar.
+- **Baixar SQL (sem criptografia):** pede a **senha do painel**, confere o SHA-256 da cópia e entrega
+  o `.sql` pronto para abrir ou importar (`psql -f`, `mariadb <`, DBeaver…). O download é por um
+  link de uso único, válido por 2 minutos, e fica registrado no log. Fora do painel:
+  [`python -m sentinela decrypt`](#11-linha-de-comando) ou, na versão portátil, o
+  `Descriptografar.bat`.
 - **Trazer para o servidor:** aparece quando a cópia não está mais no disco local, mas existe num
   destino externo.
 - **Excluir cópia:** apaga o arquivo do diretório **e as cópias externas** dela.
@@ -790,7 +798,8 @@ Comportamento:
 python -m sentinela serve [--host H --port P]   # painel web + agendador
 python -m sentinela passwd [usuario]             # cria usuário ou troca senha do painel
 python -m sentinela backup                       # backup imediato (cron/scripts); código 0 = sucesso
-python -m sentinela decrypt ARQUIVO -o SAIDA.sql [--key CHAVE]   # recupera o SQL sem o painel
+python -m sentinela decrypt ARQUIVO...           # recupera o SQL sem o painel: .sql ao lado de cada cópia
+python -m sentinela decrypt ARQUIVO -o SAIDA.sql [--key CHAVE]   # outro nome ('-' = saída padrão)
 python -m sentinela sync                         # envia aos destinos externos o que estiver pendente
 python -m sentinela key export -o ARQUIVO.key    # exporta a chave mestra (guarde fora do servidor)
 python -m sentinela key import ARQUIVO.key       # importa a chave de outra instalação (cópias antigas)
@@ -875,7 +884,7 @@ Com a **chave mestra** guardada e **uma cópia** (do disco externo, por exemplo)
 mesmo sem o painel:
 
 ```bash
-# 1. recuperar o SQL (confere a autenticação GCM e o gzip no caminho)
+# 1. recuperar o SQL (só grava o .sql se a autenticação GCM e o gzip conferirem)
 python -m sentinela decrypt loja_20260929_000000.sql.gz.enc -o loja.sql --key sentinela.key
 
 # 2a. PostgreSQL
@@ -991,8 +1000,8 @@ automaticamente (os unitários continuam rodando).
 | Arquivo | Cobre |
 |---|---|
 | `test_crypto.py` | Criptografia em fluxo, adulteração, chave errada, arquivo truncado, segredos |
-| `test_engine.py` | Backup PG nas 4 combinações de proteção, adulteração, restauração PG e MariaDB, retenção, CLI `decrypt` |
-| `test_web.py` | Login e bloqueio, segredos fora da API, fluxo completo, **logs ao vivo** (`/api/logs/tail`), checklist |
+| `test_engine.py` | Backup PG nas 4 combinações de proteção, adulteração, restauração PG e MariaDB, retenção, CLI `decrypt` (vários arquivos, chave do chaveiro, adulterado não deixa SQL pela metade) |
+| `test_web.py` | Login e bloqueio, segredos fora da API, fluxo completo, **logs ao vivo** (`/api/logs/tail`), checklist, **Baixar SQL** (senha, link de uso único/expirado/de outro usuário, cópia adulterada, ausente ou de outra chave) |
 | `test_ssh.py` | Túnel até um sshd local (senha, chave, chave protegida, troca da chave do host) |
 | `test_ssh_remote.py` | **Servidor remoto isolado** (abaixo): 56 cenários |
 | `test_replication.py` | Cópias externas em disco e S3: regra 3-2-1, falhas e recuperação (abaixo) |
@@ -1108,6 +1117,7 @@ Endpoints (todos exigem sessão, exceto login):
 | GET · DELETE | `/api/backups/<id>` | Detalhe com log / excluir |
 | POST | `/api/backups/<id>/verify` · `/restore` | Verificar / restaurar |
 | GET | `/api/backups/<id>/download` | Baixar a cópia (criptografada) |
+| POST · GET | `/api/backups/<id>/sql-token` · `/api/backups/<id>/sql?t=<token>` | Baixar o SQL sem criptografia: senha do painel → link de uso único (2 min) → download em fluxo |
 | GET | `/api/logs` · `/api/logs/tail?since=<id>` · `/api/logs/download` | Execuções, linhas novas (ao vivo), arquivo |
 | GET | `/api/executions/<id>` | Uma execução com suas linhas |
 | POST | `/api/backups/<id>/fetch` | Trazer uma cópia de um destino externo para o servidor |

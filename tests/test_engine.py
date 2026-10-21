@@ -322,3 +322,55 @@ def test_client_messages_decoded_utf8_or_ansi(env):
     assert dumpers.decode_output(msg.encode("cp1252")) == msg
     err = "ERROR 1156 (08S01): Plugin caching_sha2_password could not be loaded: x"
     assert "MySQL 8+" in dumpers.hint_for(err)
+
+
+def test_decrypt_file_without_panel(env, tmp_path):
+    """CLI / Descriptografar.bat: .sql ao lado da cópia, chave do chaveiro,
+    e nunca deixa SQL pela metade de um arquivo adulterado."""
+    from conftest import fake_backup
+    import sentinela.crypto as crypto
+    e = env["engine"]
+    sql = b"-- PostgreSQL database dump\nSELECT 'acentua\xc3\xa7\xc3\xa3o';\n-- PostgreSQL database dump complete\n"
+    _, enc = fake_backup(env, sql)
+    _, gz = fake_backup(env, sql, encrypted=False)
+    _, plain_enc = fake_backup(env, sql, compressed=False)
+    for p in (enc, gz, plain_enc):
+        out = e.decrypt_file(str(p))
+        assert out == str(p).split(".sql")[0] + ".sql" and open(out, "rb").read() == sql
+        os.remove(out)
+
+    # cópia de outra instalação: abre depois de importar a chave dela
+    other = os.urandom(32)
+    _, foreign = fake_backup(env, sql, key=other, dbname="antiga")
+    with pytest.raises(crypto.IntegrityError, match="nenhuma chave mestra"):
+        e.decrypt_file(str(foreign))
+    e.import_key(other)
+    assert open(e.decrypt_file(str(foreign)), "rb").read() == sql
+
+    # adulterado: erro e nada gravado (nem .sql nem .part)
+    for p, compressed in ((enc, True), (plain_enc, False)):
+        data = bytearray(p.read_bytes())
+        data[-20] ^= 1
+        p.write_bytes(bytes(data))
+        with pytest.raises(crypto.IntegrityError):
+            e.decrypt_file(str(p), str(tmp_path / "x.sql"))
+        assert not list(tmp_path.glob("x.sql*"))
+    with pytest.raises(crypto.IntegrityError, match="não é uma cópia"):
+        e.decrypt_file(__file__)
+
+
+def test_decrypt_cli_several_files(env, tmp_path):
+    from conftest import fake_backup
+    sql = b"-- dump\n"
+    _, a = fake_backup(env, sql, dbname="a")
+    _, b = fake_backup(env, sql, dbname="b")
+    run = dict(cwd=os.path.dirname(os.path.dirname(__file__)), env={**os.environ},
+               capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-m", "sentinela", "decrypt", str(a), str(b)], **run)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.count("SQL recuperado em") == 2
+    assert (a.parent / (a.name.split(".sql")[0] + ".sql")).read_bytes() == sql
+    r = subprocess.run([sys.executable, "-m", "sentinela", "decrypt", str(a), "-o", "-"], **run)
+    assert r.returncode == 0 and r.stdout == sql.decode()
+    r = subprocess.run([sys.executable, "-m", "sentinela", "decrypt", str(a), str(b), "-o", "x"], **run)
+    assert r.returncode != 0 and "um arquivo" in r.stderr

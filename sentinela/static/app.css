@@ -384,6 +384,8 @@ textarea.input{resize:vertical;font-size:12px;line-height:1.5;display:block}
 .modal p{font-size:13.5px;line-height:1.6;color:var(--modal-p);margin:0 0 22px}
 .modal p strong{color:var(--ink)}
 .modal .foot{display:flex;gap:10px;justify-content:flex-end}
+.modal .input{margin:-8px 0 6px}
+.modal-err{min-height:18px;font-size:12.5px;color:var(--red-h);margin-bottom:12px}
 .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:10px;background:#10233f;color:#fff;padding:12px 20px;border-radius:11px;box-shadow:0 12px 30px -8px rgba(10,25,50,.5);animation:toastIn .2s ease-out;max-width:calc(100vw - 32px)}
 .toast span{font-size:13.5px;font-weight:500}
 .toast.err{background:#5c1f22}

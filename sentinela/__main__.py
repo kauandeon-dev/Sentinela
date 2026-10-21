@@ -3,8 +3,8 @@
     python -m sentinela serve              inicia o painel web + agendador
     python -m sentinela passwd [usuario]   cria/altera usuário do painel
     python -m sentinela backup             executa um backup agora
-    python -m sentinela decrypt ARQ -o SAIDA.sql
-                                           recupera o SQL de uma cópia sem o painel
+    python -m sentinela decrypt ARQ...     recupera o SQL de cópias sem o painel (.sql ao lado;
+                                           -o SAIDA.sql para outro nome)
     python -m sentinela sync               envia ao(s) destino(s) externo(s) o que estiver pendente
     python -m sentinela key export -o ARQ  exporta a chave mestra (guarde fora do servidor)
     python -m sentinela key import ARQ     importa a chave de outra instalação (ler cópias antigas)
@@ -80,27 +80,39 @@ def cmd_backup(args):
 
 
 def cmd_decrypt(args):
-    key_path = args.key or settings.KEY_PATH
-    try:
-        key = _read_key(key_path)
-    except OSError:
-        sys.exit(f"Chave mestra não encontrada em {key_path}")
-    if len(key) != crypto.KEY_LEN:
+    if args.key:
+        try:
+            keys = [_read_key(args.key)]
+        except OSError:
+            sys.exit(f"Chave mestra não encontrada em {args.key}")
+    elif settings.KEY_PATH.exists():
+        keys = None  # a atual + as do chaveiro
+    else:
+        sys.exit(f"Chave mestra não encontrada em {settings.KEY_PATH} (use --key ARQUIVO.key)")
+    if keys and len(keys[0]) != crypto.KEY_LEN:
         sys.exit("Chave mestra inválida")
-    src = args.file
-    compressed = src.endswith(".gz") or src.endswith(".gz.enc")
-    encrypted = src.endswith(".enc")
-    out = sys.stdout.buffer if args.output == "-" else open(args.output, "wb")
-    engine._key = key
-    try:
-        engine.iter_plaintext(src, compressed, encrypted, out.write)
-    except (crypto.IntegrityError, zlib.error) as e:
-        sys.exit(f"Erro: {e}")
-    finally:
-        if out is not sys.stdout.buffer:
-            out.close()
-    if args.output != "-":
-        print(f"SQL recuperado em {args.output}")
+    if args.output and len(args.files) > 1:
+        sys.exit("-o só pode ser usado com um arquivo")
+    if args.output == "-":
+        src = args.files[0]
+        name = os.path.basename(src)
+        k = (keys or [engine.key()])[0]
+        try:
+            for chunk in engine._plain_chunks(src, ".gz" in name, name.endswith(".enc"), k):
+                sys.stdout.buffer.write(chunk)
+        except (crypto.IntegrityError, zlib.error) as e:
+            sys.exit(f"Erro: {e}")
+        return
+    failed = 0
+    for src in args.files:
+        try:
+            out = engine.decrypt_file(src, args.output, keys)
+            print(f"SQL recuperado em {out}")
+        except (crypto.IntegrityError, OSError) as e:
+            failed += 1
+            print(f"Erro: {e}", file=sys.stderr)
+    if failed:
+        sys.exit(1)
 
 
 def cmd_sync(args):
@@ -169,9 +181,10 @@ def main():
     s = sub.add_parser("backup", help="executa um backup imediatamente")
     s.set_defaults(fn=cmd_backup)
 
-    s = sub.add_parser("decrypt", help="recupera o SQL de uma cópia (.sql.gz.enc)")
-    s.add_argument("file")
-    s.add_argument("-o", "--output", required=True, help="arquivo de saída ou '-' para stdout")
+    s = sub.add_parser("decrypt", help="recupera o SQL de cópias (.sql.gz.enc)")
+    s.add_argument("files", nargs="+", metavar="ARQUIVO")
+    s.add_argument("-o", "--output", help="arquivo de saída ou '-' para stdout "
+                   "(padrão: o .sql ao lado de cada cópia)")
     s.add_argument("--key", help="caminho da chave mestra (padrão: a do SENTINELA_HOME)")
     s.set_defaults(fn=cmd_decrypt)
 

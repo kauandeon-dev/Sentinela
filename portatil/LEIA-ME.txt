@@ -18,6 +18,8 @@ COMO USAR
    Sentinela.bat       -> uso normal: você configura a conexão com o seu banco
                           na tela Conexão.
    Trocar-Senha.bat    -> troca a senha do usuário admin.
+   Descriptografar.bat -> arraste uma cópia (.sql.gz.enc) para cima dele e
+                          o .sql sem criptografia sai ao lado do arquivo.
 
 4. O navegador abre sozinho no painel. Usuário: admin
    A senha aparece na janela preta na primeira vez (anote!).
@@ -30,6 +32,9 @@ ONDE FICAM AS COISAS
 --------------------
   dados\      configurações, chave mestra (sentinela.key) e logs
   backups\    as cópias do banco
+  As cópias são criptografadas. Para ter o .sql puro: no painel, abra a
+  cópia e use "Baixar SQL (sem criptografia)" (pede sua senha), ou use o
+  Descriptografar.bat. Só funciona com a chave da pasta dados\.
   O banco de demonstração fica em %LOCALAPPDATA%\SentinelaDemo
   (pode apagar essa pasta para recomeçar a demonstração do zero).
 

@@ -6,6 +6,8 @@ nada e sem permissão de administrador. É chamado pelos atalhos .bat:
     Sentinela.bat        python portatil.py            painel do Sentinela
     Sentinela-Demo.bat   python portatil.py --demo     painel + banco de demonstração
     Trocar-Senha.bat     python portatil.py --senha    troca a senha do admin
+    Descriptografar.bat  python portatil.py --decrypt ARQ...
+                                                       .sql ao lado de cada cópia arrastada
 
 Estrutura da pasta portátil:
 
@@ -273,10 +275,49 @@ def configure_demo_connection():
 
 # ----------------------------------------------------------------------- main
 
+def decrypt(files):
+    """Arrastar cópias para o Descriptografar.bat: grava o .sql ao lado de cada uma."""
+    from sentinela import crypto, engine, settings, storage
+    if not settings.KEY_PATH.exists():
+        say(f"Chave mestra não encontrada em {settings.KEY_PATH}.")
+        say("Abra o Sentinela.bat pelo menos uma vez (ou copie a pasta dados de onde as cópias foram feitas).")
+        raise SystemExit(1)
+    if not files:
+        # Aberto com dois cliques: a cópia mais recente de cada banco
+        storage.init()
+        latest = {}
+        for b in storage.rows("SELECT dbname, path FROM backups WHERE status='success' "
+                              "AND deleted_at IS NULL AND path IS NOT NULL ORDER BY created_at DESC"):
+            if b["dbname"] not in latest and os.path.exists(b["path"]):
+                latest[b["dbname"]] = b["path"]
+        files = list(latest.values())
+        if not files:
+            say("Nenhuma cópia encontrada. Arraste um ou mais arquivos de cópia (.sql.gz.enc)")
+            say("para cima do Descriptografar.bat.")
+            raise SystemExit(1)
+        say("Nenhum arquivo arrastado: recuperando a cópia mais recente de cada banco.")
+        say("(para outra cópia, arraste o arquivo dela para cima do Descriptografar.bat)")
+    failed = 0
+    for src in files:
+        try:
+            out = engine.decrypt_file(src)
+            say(f"OK    {out}")
+        except (crypto.IntegrityError, OSError) as e:
+            failed += 1
+            say(f"ERRO  {e}")
+    say("")
+    say("Atenção: o .sql não tem criptografia — qualquer pessoa com ele lê os dados." if failed < len(files)
+        else "Nenhum arquivo recuperado.")
+    if failed:
+        raise SystemExit(1)
+
+
 def main():
     p = argparse.ArgumentParser(description="Sentinela portátil")
     p.add_argument("--demo", action="store_true", help="sobe também um banco de demonstração")
     p.add_argument("--senha", action="store_true", help="troca a senha do usuário admin")
+    p.add_argument("--decrypt", nargs="*", metavar="ARQUIVO",
+                   help="recupera o .sql de cópias (.sql.gz.enc), gravado ao lado de cada uma")
     args = p.parse_args()
 
     # Ctrl+C sempre encerra de forma limpa (mesmo se o processo foi iniciado com
@@ -295,6 +336,9 @@ def main():
     if args.senha:
         sys.argv = ["sentinela", "passwd", "admin"]
         cli.main()
+        return
+    if args.decrypt is not None:
+        decrypt(args.decrypt)
         return
 
     say("=" * 64)

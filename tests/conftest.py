@@ -32,6 +32,38 @@ def env(tmp_path, monkeypatch):
     return {"home": home, "backups": backups, "engine": e, "storage": st}
 
 
+_fake_seq = [0]
+
+
+def fake_backup(env, sql, compressed=True, encrypted=True, key=None, dbname="loja"):
+    """Registra uma cópia "pronta" sem precisar de banco: grava o arquivo no
+    formato do Sentinela (gzip e/ou AES-GCM) e a linha em ``backups``."""
+    import gzip
+    import hashlib
+    import sentinela.crypto as crypto
+    e, st = env["engine"], env["storage"]
+    st.init()
+    env["backups"].mkdir(parents=True, exist_ok=True)
+    _fake_seq[0] += 1
+    bid = f"bk_20261021_000000_{_fake_seq[0]}"
+    k = key or e.key()
+    data = gzip.compress(sql) if compressed else sql
+    if encrypted:
+        enc = crypto.StreamEncryptor(k)
+        data = enc.header() + enc.update(data) + enc.finalize()
+    name = f"{dbname}_{bid[3:]}.sql" + (".gz" if compressed else "") + (".enc" if encrypted else "")
+    path = env["backups"] / name
+    path.write_bytes(data)
+    st.execute(
+        "INSERT INTO backups(id, trigger, sgbd, dbname, created_at, finished_at, status, path, "
+        "raw_size, size, sha256, compressed, encrypted, key_id) "
+        "VALUES(?, 'manual', 'postgres', ?, ?, ?, 'success', ?, ?, ?, ?, ?, ?, ?)",
+        (bid, dbname, st.iso(st.now()), st.iso(st.now()), str(path), len(sql), len(data),
+         hashlib.sha256(data).hexdigest(), int(compressed), int(encrypted),
+         crypto.key_id(k) if encrypted else None))
+    return bid, path
+
+
 def tool(*names):
     """Acha um cliente do banco como o Sentinela acha (PATH ou, no Windows, as
     pastas de instalação padrão). None se não houver."""

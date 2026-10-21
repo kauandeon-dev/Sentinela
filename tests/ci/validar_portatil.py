@@ -73,6 +73,27 @@ check(len(backups) >= 2, f"cópias em {root / 'backups'}: {len(backups)}")
 key = (root / "dados" / "sentinela.key").read_bytes()
 check(len(key) == 32, "chave mestra íntegra (32 bytes, gravada em modo binário)")
 
+# Descriptografar.bat: arrastar uma cópia para cima do atalho (o Explorer chama
+# assim: cmd /c ""atalho.bat" "arquivo"") e sem arquivos (a mais recente)
+enc = sorted(backups)[0]
+sql = enc.with_name(enc.name.replace(".sql.gz.enc", ".sql"))
+r = subprocess.run(f'cmd /c ""{root / "Descriptografar.bat"}" "{enc}""', cwd=str(enc.parent),
+                   capture_output=True, stdin=subprocess.DEVNULL)
+saida = r.stdout.decode("utf-8", "replace")
+check(sql.exists() and "OK" in saida, f"Descriptografar.bat com arquivo arrastado gera {sql.name}: "
+      + saida.strip().replace("\r\n", " | "))
+texto = sql.read_text(encoding="utf-8")
+check("PostgreSQL database dump complete" in texto and "São Lourenço do Oeste" in texto,
+      "SQL descriptografado completo e com acentos")
+sql.unlink()
+r = subprocess.run(["cmd", "/c", str(root / "Descriptografar.bat")], capture_output=True,
+                   stdin=subprocess.DEVNULL)
+novos = list((root / "backups").glob("*.sql"))
+check(len(novos) == 1 and "mais recente" in r.stdout.decode("utf-8", "replace"),
+      f"Descriptografar.bat sem arquivos recupera a cópia mais recente: {[n.name for n in novos]}")
+for n in novos:
+    n.unlink()
+
 # MySQL 8+ local, usuário root SEM senha (login caching_sha2_password): o cliente
 # MariaDB embutido precisa do plugin — era o erro "Plugin caching_sha2_password
 # could not be loaded".

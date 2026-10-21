@@ -1,13 +1,15 @@
 """Interface web (API JSON + página única) do Sentinela."""
 
 import os
+import secrets
 import shutil
 import time
+import zlib
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file, session
+from flask import Flask, Response, jsonify, request, send_file, session
 from werkzeug.security import check_password_hash
 from io import BytesIO
 
@@ -19,6 +21,9 @@ STATIC = Path(__file__).parent / "static"
 # Proteção simples contra força bruta no login: 5 falhas por IP => 60s de bloqueio.
 _fails = {}
 MAX_FAILS, LOCK_SECONDS = 5, 60
+
+# Link de download do SQL sem criptografia: uso único, curto e preso à sessão.
+SQL_TOKEN_TTL = 120
 
 
 def create_app():
@@ -261,6 +266,58 @@ def create_app():
         engine.log.info("Download da cópia %s por '%s'", bid, session["user"])
         return send_file(b["path"], as_attachment=True, download_name=os.path.basename(b["path"]),
                          mimetype="application/octet-stream")
+
+    # SQL em texto claro: a senha é conferida num POST que devolve um link de uso
+    # único; o navegador baixa por esse link em streaming (sem carregar o dump
+    # inteiro na memória da página).
+    sql_tokens = {}
+
+    def _ready_backup(bid):
+        b = engine.get_backup(bid)
+        return b if b and b["status"] == "success" and not b["deleted_at"] else None
+
+    @app.post("/api/backups/<bid>/sql-token")
+    @login_required
+    def sql_token(bid):
+        user = storage.get_user(session["user"])
+        if not user or not check_password_hash(user["password_hash"], str(body().get("password", ""))):
+            return jsonify(error="Senha incorreta"), 403
+        b = _ready_backup(bid)
+        if not b:
+            return jsonify(error="Arquivo indisponível"), 404
+        try:
+            engine.check_download(b)
+        except crypto.IntegrityError as e:
+            return jsonify(error=str(e)), 409
+        now = time.time()
+        for t, (_, _, exp) in list(sql_tokens.items()):
+            if exp < now:
+                sql_tokens.pop(t, None)
+        token = secrets.token_urlsafe(32)
+        sql_tokens[token] = (session["user"], bid, now + SQL_TOKEN_TTL)
+        return jsonify(url=f"/api/backups/{bid}/sql?t={token}", filename=engine.sql_filename(b))
+
+    @app.get("/api/backups/<bid>/sql")
+    @login_required
+    def download_sql(bid):
+        entry = sql_tokens.pop(request.args.get("t", ""), None)
+        if not entry or entry[:2] != (session["user"], bid) or entry[2] < time.time():
+            return jsonify(error="Link de download expirado. Clique de novo em \"Baixar SQL\"."), 403
+        b = _ready_backup(bid)
+        if not b or not b["path"] or not os.path.exists(b["path"]):
+            return jsonify(error="Arquivo indisponível"), 404
+        engine.log.info("Download do SQL (sem criptografia) da cópia %s por '%s'", bid, session["user"])
+
+        def chunks():
+            try:
+                yield from engine.plaintext_chunks(b)
+            except (crypto.IntegrityError, zlib.error) as e:
+                engine.log.error("Download do SQL da cópia %s interrompido: %s", bid, e)
+                raise
+
+        resp = Response(chunks(), mimetype="application/sql")
+        resp.headers.set("Content-Disposition", "attachment", filename=engine.sql_filename(b))
+        return resp
 
     @app.post("/api/backups/<bid>/fetch")
     @login_required

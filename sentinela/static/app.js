@@ -740,9 +740,10 @@
           <button class="btn btn-primary" data-action="restore" ${!canRestore || running ? 'disabled' : ''}>${I.restore}Restaurar este backup</button>
           ${ok && !b.local && extOk ? `<button class="btn btn-soft" data-action="fetch" ${running ? 'disabled' : ''}>${I.download}Trazer para o servidor</button>` : ''}
           <button class="btn btn-ghost" data-action="verify" ${!ok || running || S.busy.verify ? 'disabled' : ''}>${S.busy.verify ? I.spinner() + 'Verificando…' : I.verify + 'Verificar integridade'}</button>
-          <a class="btn btn-ghost ${ok && b.local ? '' : 'disabled'}" ${ok && b.local ? `href="/api/backups/${encodeURIComponent(b.id)}/download"` : ''}>${I.download}Baixar cópia</a>
+          <a class="btn btn-ghost ${ok && b.local ? '' : 'disabled'}" ${ok && b.local ? `href="/api/backups/${encodeURIComponent(b.id)}/download"` : ''}>${I.download}Baixar cópia${b.encrypted ? ' (criptografada)' : ''}</a>
+          ${ok && b.local && (b.encrypted || b.compressed) ? `<button class="btn btn-ghost" data-action="sql-download">${I.download}Baixar SQL ${b.encrypted ? '(sem criptografia)' : '(descompactado)'}</button>` : ''}
           <button class="btn btn-danger-ghost" data-action="delete" ${b.status === 'running' ? 'disabled' : ''}>${I.trash}Excluir cópia</button>
-          ${ok && b.encrypted ? '<div class="hint">A cópia baixada continua criptografada. Para ler fora do painel: <span class="mono">python -m sentinela decrypt</span>.</div>' : ''}
+          ${ok && b.encrypted ? '<div class="hint">"Baixar cópia" entrega o arquivo criptografado, para guardar. "Baixar SQL" pede sua senha e entrega o <span class="mono">.sql</span> pronto para abrir ou importar. Fora do painel: <span class="mono">python -m sentinela decrypt ARQUIVO</span>.</div>' : ''}
         </div>
       </div>
       ${ok ? viewReplicas(reps) : ''}
@@ -1196,6 +1197,29 @@
     </div></div>`;
     document.getElementById('modal-ok').addEventListener('click', async () => { modalRoot.innerHTML = ''; await onOk(); });
   }
+  // Pede a senha do painel; ``onOk(senha)`` devolve uma mensagem de erro (fica aberto) ou nada.
+  function passwordModal({ title, html, okLabel, onOk }) {
+    modalRoot.innerHTML = `<div class="overlay" data-close="1"><div class="modal" role="dialog" aria-modal="true">
+      <div class="ic">${I.warn('#d97706', 24)}</div>
+      <h3>${title}</h3><p>${html}</p>
+      <input class="input sm" id="modal-pw" type="password" placeholder="Sua senha do painel" autocomplete="current-password">
+      <div class="modal-err" id="modal-err"></div>
+      <div class="foot"><button class="btn btn-ghost" data-close="1">Cancelar</button><button class="btn btn-primary" id="modal-ok">${okLabel}</button></div>
+    </div></div>`;
+    const input = document.getElementById('modal-pw'), btn = document.getElementById('modal-ok');
+    const submit = async () => {
+      if (!input.value) { input.focus(); return; }
+      btn.disabled = true; btn.innerHTML = I.spinner() + 'Conferindo…';
+      const err = await onOk(input.value);
+      if (!document.getElementById('modal-ok')) return;
+      if (!err) { modalRoot.innerHTML = ''; return; }
+      document.getElementById('modal-err').textContent = err;
+      btn.disabled = false; btn.textContent = okLabel; input.select();
+    };
+    btn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    input.focus();
+  }
   modalRoot.addEventListener('click', (e) => { if (e.target.dataset.close) modalRoot.innerHTML = ''; });
 
   // ================================================================= ações
@@ -1384,6 +1408,24 @@
         toast('Nada pendente: todas as cópias já estão nos destinos');
       } catch (e) { toast(e.message, true); }
       S.busy.sync = false; await load(); render(); schedulePoll();
+    },
+    'sql-download'() {
+      const b = S.detail.backup;
+      passwordModal({
+        title: 'Baixar o SQL sem criptografia',
+        html: `O arquivo <strong>${esc(b.dbname)}</strong> sai em texto puro: qualquer pessoa com ele lê todos os dados do banco. Confirme com sua senha e guarde-o com cuidado.`,
+        okLabel: 'Baixar SQL',
+        async onOk(password) {
+          try {
+            const r = await api('POST', `/api/backups/${encodeURIComponent(b.id)}/sql-token`, { password });
+            const a = document.createElement('a');
+            a.href = r.url; a.download = r.filename;
+            document.body.appendChild(a); a.click(); a.remove();
+            toast(`Baixando ${r.filename}`);
+            return null;
+          } catch (e) { return e.message; }
+        },
+      });
     },
     async 'key-export'() {
       const pw = document.getElementById('key-pw').value;

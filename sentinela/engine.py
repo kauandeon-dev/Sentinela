@@ -893,32 +893,113 @@ def file_sha256(path):
     return h.hexdigest()
 
 
+def _plain_chunks(path, compressed, encrypted, k=None):
+    """Gera o SQL original de um arquivo, desfazendo criptografia e compressão."""
+    if encrypted:
+        source = crypto.decrypt_chunks(path, k)
+    else:
+        def raw():
+            with open(path, "rb") as f:
+                yield from iter(lambda: f.read(CHUNK), b"")
+        source = raw()
+    if not compressed:
+        yield from source
+        return
+    d = zlib.decompressobj(31)
+    for chunk in source:
+        out = d.decompress(chunk)
+        if out:
+            yield out
+    rest = d.flush()
+    if rest:
+        yield rest
+    if not d.eof:
+        raise crypto.IntegrityError("Arquivo gzip truncado")
+
+
 def iter_plaintext(path, compressed, encrypted, sink, key_id=None):
     """Envia para ``sink`` o SQL original, desfazendo criptografia e compressão."""
-    if compressed:
-        d = zlib.decompressobj(31)
+    for chunk in _plain_chunks(path, compressed, encrypted, key_for(key_id) if encrypted else None):
+        sink(chunk)
 
-        def inner(b):
-            out = d.decompress(b)
-            if out:
-                sink(out)
-    else:
-        d = None
-        inner = sink
 
+def check_download(b):
+    """Confere se dá para entregar o SQL de uma cópia: arquivo presente, hash
+    igual ao registrado e chave disponível. Levanta IntegrityError com o motivo."""
+    path = b.get("path")
+    if not path or not os.path.exists(path):
+        raise crypto.IntegrityError("A cópia não está neste servidor. Use \"Trazer para o servidor\" "
+                                    "para buscá-la num destino externo.")
+    if b.get("sha256") and file_sha256(path) != b["sha256"]:
+        raise crypto.IntegrityError("Hash SHA-256 diferente do registrado — arquivo alterado. "
+                                    "Use \"Verificar\" para buscar uma réplica íntegra.")
+    if b["encrypted"]:
+        key_for(b.get("key_id"))
+
+
+def plaintext_chunks(b):
+    """Gera o SQL original de uma cópia já conferida por ``check_download``
+    (a tag GCM e o fim do gzip ainda são conferidos no fim)."""
+    k = key_for(b.get("key_id")) if b["encrypted"] else None
+    yield from _plain_chunks(b["path"], b["compressed"], b["encrypted"], k)
+
+
+def sql_filename(b):
+    """Nome do .sql: o da cópia sem as extensões .gz/.enc."""
+    name = os.path.basename(b.get("path") or "") or f"{safe_name(b['dbname'])}_{b['id']}.sql"
+    for ext in (".enc", ".gz"):
+        if name.endswith(ext):
+            name = name[: -len(ext)]
+    return name if name.endswith(".sql") else name + ".sql"
+
+
+def _all_keys():
+    """Chave atual + as importadas para o chaveiro."""
+    keys = [key()]
+    if settings.KEYRING_DIR.is_dir():
+        for p in sorted(settings.KEYRING_DIR.glob("*.key")):
+            data = p.read_bytes()
+            if len(data) == crypto.KEY_LEN and data not in keys:
+                keys.append(data)
+    return keys
+
+
+def decrypt_file(src, dst=None, keys=None):
+    """Recupera o SQL de um arquivo de cópia sem o painel (CLI e versão portátil).
+
+    Grava em ``dst`` (padrão: o .sql ao lado do arquivo) passando por ``.part``:
+    só renomeia se a autenticação e o gzip conferirem, então um arquivo
+    adulterado não deixa SQL pela metade. Tenta a chave atual e as do chaveiro.
+    Retorna o caminho gravado."""
+    src = os.path.abspath(src)
+    if not os.path.isfile(src):
+        raise crypto.IntegrityError(f"Arquivo não encontrado: {src}")
+    name = os.path.basename(src)
+    encrypted = name.endswith(".enc")
+    compressed = name.endswith(".gz") or name.endswith(".gz.enc")
+    if not (encrypted or compressed):
+        raise crypto.IntegrityError(f"{name} não é uma cópia .sql.gz.enc, .sql.enc ou .sql.gz")
+    dst = os.path.abspath(dst or os.path.join(os.path.dirname(src), sql_filename({"path": src})))
+    part = dst + ".part"
+    last = None
+    for k in (keys or _all_keys()) if encrypted else [None]:
+        try:
+            with os.fdopen(compat.open_private(part), "wb") as out:
+                for chunk in _plain_chunks(src, compressed, encrypted, k):
+                    out.write(chunk)
+            os.replace(part, dst)
+            return dst
+        except (crypto.IntegrityError, zlib.error) as e:
+            last = e
+        finally:
+            if os.path.exists(part):
+                os.remove(part)
     if encrypted:
-        crypto.decrypt_stream(path, key_for(key_id), inner)
-    else:
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(CHUNK), b""):
-                inner(chunk)
-
-    if d is not None:
-        rest = d.flush()
-        if rest:
-            sink(rest)
-        if not d.eof:
-            raise crypto.IntegrityError("Arquivo gzip truncado")
+        raise crypto.IntegrityError(
+            f"{name}: nenhuma chave mestra deste Sentinela abre o arquivo (adulterado ou "
+            "criptografado por outra instalação — importe a chave dela com: "
+            "python -m sentinela key import ARQUIVO.key)")
+    raise crypto.IntegrityError(f"{name}: {last}")
 
 
 def _check_plaintext(path, compressed, encrypted, expected_sha=None, progress=None, key_id=None):

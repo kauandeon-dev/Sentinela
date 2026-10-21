@@ -1,8 +1,10 @@
+import os
 import time
 
+import pytest
 from werkzeug.security import generate_password_hash
 
-from conftest import PG, needs_pg
+from conftest import PG, fake_backup, needs_pg
 
 
 def _client(env):
@@ -221,3 +223,65 @@ def test_connection_password_can_be_cleared(env):
     c.put("/api/connection", json={**PG, "password": "", "clear_password": True})
     assert c.get("/api/state").get_json()["connection"]["has_password"] is False
     assert env["engine"].get_connection(with_password=True)["password"] == ""
+
+
+SQL = "-- PostgreSQL database dump\nINSERT INTO clientes VALUES (1, 'São Lourenço do Oeste');\n" \
+      "-- PostgreSQL database dump complete\n"
+
+
+def _sql_link(c, bid, password="senha-forte-123"):
+    return c.post(f"/api/backups/{bid}/sql-token", json={"password": password})
+
+
+@pytest.mark.parametrize("compressed,encrypted", [(True, True), (False, True), (True, False)])
+def test_sql_download_plain_with_password_and_single_use_link(env, compressed, encrypted):
+    c = _client(env)
+    bid, path = fake_backup(env, SQL.encode(), compressed, encrypted)
+    assert _sql_link(c, bid).status_code == 401                    # sem login
+    _login(c)
+    assert _sql_link(c, bid, "errada").status_code == 403          # senha errada
+    r = _sql_link(c, bid)
+    assert r.status_code == 200
+    link = r.get_json()
+    assert link["filename"] == os.path.basename(path).split(".sql")[0] + ".sql"
+    d = c.get(link["url"])
+    assert d.status_code == 200 and d.data.decode() == SQL
+    assert d.headers["Content-Disposition"] == f"attachment; filename={link['filename']}"
+    assert c.get(link["url"]).status_code == 403                   # link de uso único
+    other, _ = fake_backup(env, b"-- outra", True, True)
+    t = _sql_link(c, bid).get_json()["url"].split("?t=")[1]
+    assert c.get(f"/api/backups/{other}/sql?t={t}").status_code == 403   # preso à cópia
+    assert c.get(f"/api/backups/{bid}/sql").status_code == 403
+
+
+def test_sql_download_link_expires_and_needs_same_user(env, monkeypatch):
+    import sentinela.web as web
+    c = _client(env)
+    _login(c)
+    bid, _ = fake_backup(env, SQL.encode())
+    url = _sql_link(c, bid).get_json()["url"]
+    env["storage"].upsert_user("outro", generate_password_hash("outra-senha-123"))
+    c2 = web.create_app().test_client()
+    assert c2.post("/api/login", json={"username": "outro", "password": "outra-senha-123"}).status_code == 200
+    assert c2.get(url).status_code == 403                          # outro usuário
+    monkeypatch.setattr(web, "SQL_TOKEN_TTL", -1)
+    url = _sql_link(c, bid).get_json()["url"]
+    assert c.get(url).status_code == 403                           # expirado
+
+
+def test_sql_download_refuses_tampered_missing_or_foreign_key(env):
+    c = _client(env)
+    _login(c)
+    bid, path = fake_backup(env, SQL.encode())
+    data = bytearray(path.read_bytes())
+    data[len(data) // 2] ^= 1
+    path.write_bytes(bytes(data))
+    r = _sql_link(c, bid)
+    assert r.status_code == 409 and "SHA-256" in r.get_json()["error"]
+    os.remove(path)
+    r = _sql_link(c, bid)
+    assert r.status_code == 409 and "não está neste servidor" in r.get_json()["error"]
+    bid, _ = fake_backup(env, SQL.encode(), key=os.urandom(32))   # cópia de outra instalação
+    r = _sql_link(c, bid)
+    assert r.status_code == 409 and "outra chave mestra" in r.get_json()["error"]
+    assert _sql_link(c, "bk_nao_existe").status_code == 404

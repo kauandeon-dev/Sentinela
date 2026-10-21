@@ -53,7 +53,7 @@ jobs:
           New-Item -ItemType Directory -Force "C:\Teste Portátil" | Out-Null
           Expand-Archive Sentinela-Portatil-Windows.zip "C:\Teste Portátil" -Force
           Get-ChildItem "C:\Teste Portátil\Sentinela"
-      - name: MySQL 8 local com root sem senha (caching_sha2_password)
+      - name: Preparar MySQL 8 local com root sem senha (caching_sha2_password)
         shell: pwsh
         run: |
           $mysqld = (Get-ChildItem "C:\Program Files\MySQL\MySQL Server *\bin\mysqld.exe" -ErrorAction SilentlyContinue |
@@ -77,6 +77,16 @@ jobs:
             "INSERT INTO loja_mysql.pedidos (cliente_id, valor) SELECT 1 + (n % 2), n * 1.5 FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 5000) SELECT n FROM s) t WHERE NOT EXISTS (SELECT 1 FROM loja_mysql.pedidos);",
             "CREATE PROCEDURE IF NOT EXISTS loja_mysql.total_clientes() SELECT COUNT(*) FROM loja_mysql.clientes;"
           ) | Set-Content -Encoding utf8NoBOM C:\mysql-init.sql
+          "$mysqld" | Set-Content C:\mysqld-caminho.txt
+      - name: Validar como um usuário (dois cliques no Sentinela-Demo.bat)
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          MYSQL_TEST_PORT: "3307"
+        run: |
+          # O MySQL precisa ser iniciado neste mesmo passo: o GitHub encerra, no fim de
+          # cada passo, os processos que ele iniciou.
+          $mysqld = Get-Content C:\mysqld-caminho.txt
           Start-Process $mysqld -ArgumentList "--datadir=C:\mysql-dados", "--port=3307", "--init-file=C:\mysql-init.sql", "--console" `
                         -RedirectStandardError C:\mysql.err -RedirectStandardOutput C:\mysql.out -WindowStyle Hidden
           for ($i = 0; $i -lt 60; $i++) {
@@ -87,12 +97,7 @@ jobs:
           Get-Content C:\mysql.err
           if (Select-String -Path C:\mysql.err -Pattern "\[ERROR\]" -Quiet) { throw "erro no MySQL de teste" }
           if (-not (Test-NetConnection 127.0.0.1 -Port 3307 -WarningAction SilentlyContinue).TcpTestSucceeded) { throw "MySQL de teste não está no ar" }
-      - name: Validar como um usuário (dois cliques no Sentinela-Demo.bat)
-        shell: pwsh
-        env:
-          PYTHONUTF8: "1"
-          MYSQL_TEST_PORT: "3307"
-        run: python tests/ci/validar_portatil.py "C:\Teste Portátil\Sentinela"
+          python tests/ci/validar_portatil.py "C:\Teste Portátil\Sentinela"
 
   publicar:
     needs: validar

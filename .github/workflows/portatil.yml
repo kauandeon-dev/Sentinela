@@ -72,6 +72,7 @@ jobs:
             "CREATE DATABASE IF NOT EXISTS loja_mysql CHARACTER SET utf8mb4;",
             "CREATE TABLE IF NOT EXISTS loja_mysql.clientes (id INT PRIMARY KEY AUTO_INCREMENT, nome VARCHAR(100), cidade VARCHAR(80)) DEFAULT CHARSET=utf8mb4;",
             "INSERT IGNORE INTO loja_mysql.clientes (id, nome, cidade) VALUES (1, 'Ana', 'São Lourenço do Oeste'), (2, 'João', 'Chapecó');",
+            "SET SESSION cte_max_recursion_depth = 10000;",
             "CREATE TABLE IF NOT EXISTS loja_mysql.pedidos (id INT PRIMARY KEY AUTO_INCREMENT, cliente_id INT, valor DECIMAL(10,2));",
             "INSERT INTO loja_mysql.pedidos (cliente_id, valor) SELECT 1 + (n % 2), n * 1.5 FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 5000) SELECT n FROM s) t WHERE NOT EXISTS (SELECT 1 FROM loja_mysql.pedidos);",
             "CREATE PROCEDURE IF NOT EXISTS loja_mysql.total_clientes() SELECT COUNT(*) FROM loja_mysql.clientes;"
@@ -82,8 +83,10 @@ jobs:
             if ((Test-NetConnection 127.0.0.1 -Port 3307 -WarningAction SilentlyContinue).TcpTestSucceeded) { break }
             Start-Sleep 2
           }
-          Start-Sleep 3
-          Get-Content C:\mysql.err -Tail 5
+          Start-Sleep 5
+          Get-Content C:\mysql.err
+          if (Select-String -Path C:\mysql.err -Pattern "\[ERROR\]" -Quiet) { throw "erro no MySQL de teste" }
+          if (-not (Test-NetConnection 127.0.0.1 -Port 3307 -WarningAction SilentlyContinue).TcpTestSucceeded) { throw "MySQL de teste não está no ar" }
       - name: Validar como um usuário (dois cliques no Sentinela-Demo.bat)
         shell: pwsh
         env:

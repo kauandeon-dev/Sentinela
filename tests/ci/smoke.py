@@ -15,7 +15,7 @@ URL, USER, PW, DBHOST, DEST = sys.argv[1:6]
 DBPORT, DBNAME, DBUSER, DBPASS, SGBD = (sys.argv[6:11] + ["5432", "loja_producao", "backup_user",
                                                           "senha123", "postgres"][len(sys.argv[6:11]):])
 CONN = {"sgbd": SGBD, "host": DBHOST, "port": DBPORT, "dbname": DBNAME,
-        "user": DBUSER, "password": DBPASS}
+        "user": DBUSER, "password": DBPASS, "clear_password": DBPASS == ""}
 jar = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
 

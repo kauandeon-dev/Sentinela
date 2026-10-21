@@ -207,3 +207,17 @@ def test_key_export_requires_password(env):
     assert r.status_code == 200 and r.data == env["engine"].key()
     assert "attachment" in r.headers["Content-Disposition"]
     assert c.get("/api/state").get_json()["key_exported_at"]
+
+
+def test_connection_password_can_be_cleared(env):
+    """root sem senha (MySQL/MariaDB local): campo vazio mantém a senha salva,
+    por isso há o pedido explícito "Usuário sem senha"."""
+    c = _client(env)
+    _login(c)
+    c.put("/api/connection", json={**PG, "password": "antiga"})
+    assert c.get("/api/state").get_json()["connection"]["has_password"] is True
+    c.put("/api/connection", json={**PG, "password": ""})          # vazio: mantém
+    assert c.get("/api/state").get_json()["connection"]["has_password"] is True
+    c.put("/api/connection", json={**PG, "password": "", "clear_password": True})
+    assert c.get("/api/state").get_json()["connection"]["has_password"] is False
+    assert env["engine"].get_connection(with_password=True)["password"] == ""

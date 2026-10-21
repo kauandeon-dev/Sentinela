@@ -270,7 +270,11 @@ def save_connection(data):
             c[f] = str(data[f]).strip()
     if c["port"] and not c["port"].isdigit():
         raise ValueError("Porta inválida")
-    if data.get("password"):
+    if data.get("clear_password"):
+        # "Usuário sem senha" (ex.: root de um MySQL/MariaDB local): campo vazio
+        # sozinho significa "manter a senha salva", por isso o pedido explícito.
+        c["password_sealed"] = ""
+    elif data.get("password"):
         c["password_sealed"] = crypto.seal(key(), data["password"])
     if isinstance(data.get("ssh"), dict):
         d = data["ssh"]
@@ -317,7 +321,9 @@ def test_connection(data=None):
         for f in ("sgbd", "host", "port", "dbname", "user"):
             if data.get(f) not in (None, ""):
                 c[f] = str(data[f]).strip()
-        if data.get("password"):
+        if data.get("clear_password"):
+            c["password"] = ""
+        elif data.get("password"):
             c["password"] = data["password"]
         if isinstance(data.get("ssh"), dict):
             d, ssh = data["ssh"], c["ssh"]

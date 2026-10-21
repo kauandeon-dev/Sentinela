@@ -943,7 +943,10 @@
         <div class="card-sub">${sh.enabled ? 'Host e porta do banco <strong>vistos a partir do servidor SSH</strong> — normalmente <span class="mono">localhost</span>.' : 'Endereço do servidor de banco de dados.'}</div>
         <div class="g21 mb16">${f('c-host', 'Host', c.host)}${f('c-port', 'Porta', c.port)}</div>
         <div class="mb16">${f('c-dbname', 'Nome do banco', c.dbname, 'text', 'ex.: loja_producao')}</div>
-        <div class="g2 mb20">${f('c-user', 'Usuário', c.user)}${f('c-password', 'Senha', c.password || '', 'password', S.data.connection.has_password ? '•••••••• (mantida)' : '')}</div>
+        <div class="g2 mb8">${f('c-user', 'Usuário', c.user)}${c.clear_password
+          ? `<div><label class="lbl" for="c-password">Senha</label><input class="input sm mono" id="c-password" type="password" value="" placeholder="sem senha" disabled></div>`
+          : f('c-password', 'Senha', c.password || '', 'password', S.data.connection.has_password ? '•••••••• (mantida)' : '')}</div>
+        <label class="check mb20"><input type="checkbox" data-action="conn-nopass" ${c.clear_password ? 'checked' : ''}> Usuário sem senha <span class="muted">(ex.: root de um MySQL/MariaDB local)</span></label>
         <div class="actions" style="gap:14px">
           <button class="btn btn-soft" data-action="conn-test" ${t.status === 'testing' ? 'disabled' : ''}>Testar conexão</button>
           ${testMsg}
@@ -1244,6 +1247,7 @@
     },
     'sgbd-postgres'() { setSgbd('postgres'); },
     'sgbd-mariadb'() { setSgbd('mariadb'); },
+    'conn-nopass'() { readConn(); S.connDraft.clear_password = !S.connDraft.clear_password; if (S.connDraft.clear_password) S.connDraft.password = ''; S.test = { status: 'idle' }; render(); },
     'ssh-on'() { readConn(); S.connDraft.ssh.enabled = true; S.test = { status: 'idle' }; render(); },
     'ssh-off'() { readConn(); S.connDraft.ssh.enabled = false; S.test = { status: 'idle' }; render(); },
     'ssh-auth-password'() { readConn(); S.connDraft.ssh.auth = 'password'; render(); },
@@ -1264,9 +1268,11 @@
     async 'conn-save'() {
       readConn(); S.busy.conn = true; render();
       try {
-        const r = await api('PUT', '/api/connection', S.connDraft);
+        const sent = Object.assign({}, S.connDraft);
+        const r = await api('PUT', '/api/connection', sent);
         S.data.connection = r.connection;
-        S.connDraft = newConnDraft(r.connection, S.connDraft.directory);
+        S.connDraft = newConnDraft(r.connection, sent.directory);
+        S.connDraft.clear_password = !!sent.clear_password && !r.connection.has_password;
         toast('Configurações de conexão salvas');
         await load();
       } catch (e) { toast(e.message, true); }
@@ -1444,7 +1450,7 @@
 
   function newConnDraft(conn, directory) {
     const ssh = Object.assign({ password: '', private_key: '', key_passphrase: '' }, conn.ssh || {});
-    return Object.assign({}, conn, { password: '', directory, ssh });
+    return Object.assign({}, conn, { password: '', directory, ssh, clear_password: false });
   }
 
   function setDestType(t) {

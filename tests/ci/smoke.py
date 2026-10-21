@@ -3,7 +3,7 @@
 Usa só a API, como o painel: login, conexão, backup, verificação, restauração
 e destino externo "Outro disco". Uso:
     python tests/ci/smoke.py URL USUARIO SENHA HOST_DO_BANCO PASTA_DESTINO \
-        [PORTA BANCO USUARIO_BANCO SENHA_BANCO]
+        [PORTA BANCO USUARIO_BANCO SENHA_BANCO [SGBD]]
 """
 import http.cookiejar
 import json
@@ -12,8 +12,9 @@ import time
 import urllib.request
 
 URL, USER, PW, DBHOST, DEST = sys.argv[1:6]
-DBPORT, DBNAME, DBUSER, DBPASS = (sys.argv[6:10] + ["5432", "loja_producao", "backup_user", "senha123"][len(sys.argv[6:10]):])
-CONN = {"sgbd": "postgres", "host": DBHOST, "port": DBPORT, "dbname": DBNAME,
+DBPORT, DBNAME, DBUSER, DBPASS, SGBD = (sys.argv[6:11] + ["5432", "loja_producao", "backup_user",
+                                                          "senha123", "postgres"][len(sys.argv[6:11]):])
+CONN = {"sgbd": SGBD, "host": DBHOST, "port": DBPORT, "dbname": DBNAME,
         "user": DBUSER, "password": DBPASS}
 jar = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
@@ -53,8 +54,12 @@ check(call("POST", "/api/login", {"username": USER, "password": PW})[0] == 200, 
 st, r = call("POST", "/api/connection/test", CONN)
 check(r.get("ok"), f"teste de conexão: {r}")
 check(call("PUT", "/api/connection", CONN)[0] == 200, "conexão salva")
-st, r = call("POST", "/api/destinations", {"type": "directory", "name": "Disco externo", "path": DEST})
-check(st == 201, f"destino externo criado: {r}")
+existing = [d for d in call("GET", "/api/destinations")[1]["destinations"] if d.get("path") == DEST]
+if existing:
+    print("OK    destino externo já cadastrado", flush=True)
+else:
+    st, r = call("POST", "/api/destinations", {"type": "directory", "name": "Disco externo", "path": DEST})
+    check(st == 201, f"destino externo criado: {r}")
 st, r = call("POST", "/api/backups")
 check(st == 202, "backup iniciado")
 bid = r["id"]

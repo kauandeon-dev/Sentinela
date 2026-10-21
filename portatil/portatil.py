@@ -62,6 +62,10 @@ def setup_env():
     for var, path in tools:
         if path.exists():
             os.environ.setdefault(var, str(path))
+    # Plugins de login do cliente MariaDB (caching_sha2_password do MySQL 8+)
+    plugins = TOOLS / "mariadb" / "plugin"
+    if plugins.is_dir():
+        os.environ.setdefault("MARIADB_PLUGIN_DIR", str(plugins))
     if str(APP) not in sys.path:
         sys.path.insert(0, str(APP))
 

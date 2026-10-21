@@ -73,6 +73,32 @@ check(len(backups) >= 2, f"cópias em {root / 'backups'}: {len(backups)}")
 key = (root / "dados" / "sentinela.key").read_bytes()
 check(len(key) == 32, "chave mestra íntegra (32 bytes, gravada em modo binário)")
 
+# MySQL 8+ local, usuário root SEM senha (login caching_sha2_password): o cliente
+# MariaDB embutido precisa do plugin — era o erro "Plugin caching_sha2_password
+# could not be loaded".
+mysql_port = os.environ.get("MYSQL_TEST_PORT")
+if mysql_port:
+    maria = root / "ferramentas" / "mariadb" / "mariadb.exe"
+    check((root / "ferramentas" / "mariadb" / "plugin" / "caching_sha2_password.dll").exists(),
+          "plugin caching_sha2_password.dll incluído no pacote")
+    r = subprocess.run([str(sys.executable), str(here / "smoke.py"), url, "admin", pw, "127.0.0.1",
+                        str(root.parent / "disco-externo"), mysql_port, "loja_mysql", "root", "",
+                        "mariadb"])
+    check(r.returncode == 0, "MySQL 8 com root sem senha: conexão, backup, verificação e restauração")
+    q = subprocess.run([str(maria), "-h", "127.0.0.1", "-P", mysql_port, "-u", "root",
+                        f"--plugin-dir={root / 'ferramentas' / 'mariadb' / 'plugin'}",
+                        "--ssl-verify-server-cert=0", "-N", "-B", "loja_mysql", "-e",
+                        "SELECT cidade FROM clientes WHERE id=1; SELECT COUNT(*) FROM pedidos; "
+                        "SHOW PROCEDURE STATUS WHERE Db='loja_mysql'"],
+                       capture_output=True)
+    out = q.stdout.decode("utf-8", "replace")
+    check(q.returncode == 0 and "São Lourenço do Oeste" in out and "\n5000\n" in out
+          and "total_clientes" in out,
+          "dados do MySQL intactos após restaurar (acentos, 5000 pedidos, procedure): "
+          + (out or q.stderr.decode("utf-8", "replace")).replace("\n", " | "))
+    backups_mysql = list((root / "backups").glob("loja_mysql_*.sql.gz.enc"))
+    check(len(backups_mysql) >= 2, f"cópias do MySQL: {len(backups_mysql)}")
+
 # Encerrar com Ctrl+Break (como Ctrl+C na janela) deve desligar também o
 # PostgreSQL da demonstração
 import signal  # noqa: E402

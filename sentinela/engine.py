@@ -861,7 +861,7 @@ def _stream_dump(adapter, part, policy, elog=None):
     os.fsync(out.fileno())
     out.close()
 
-    stderr = dumpers.clean_stderr(b"".join(c for c in err_chunks if c).decode("utf-8", "replace"))
+    stderr = dumpers.clean_stderr(dumpers.decode_output(b"".join(c for c in err_chunks if c)))
     if rc != 0:
         raise BackupError(f"Falha ao gerar dump: {stderr or f'código de saída {rc}'}"
                           f"{dumpers.hint_for(stderr)}")
@@ -1098,7 +1098,7 @@ def _perform_restore(elog, b, conn):
             rc = proc.wait()
             t.join(5)
             stderr = dumpers.clean_stderr(
-                b"".join(c for c in err_chunks if c).decode("utf-8", "replace"))
+                dumpers.decode_output(b"".join(c for c in err_chunks if c)))
             if rc != 0 or broken:
                 hint = ""
                 if adapter.sgbd == "mariadb" and pre_id:

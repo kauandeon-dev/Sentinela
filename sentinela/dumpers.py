@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 from contextlib import contextmanager
 
 from . import compat, settings
@@ -89,13 +90,12 @@ class Adapter:
     def query(self, sql):
         """Executa uma consulta e devolve a saída em texto (erro => RuntimeError)."""
         with self.query_cmd(sql) as (cmd, env):
-            p = subprocess.run(
-                cmd, env=env, capture_output=True, text=True,
-                timeout=settings.CONNECT_TIMEOUT + 5,
-            )
+            p = subprocess.run(cmd, env=env, capture_output=True,
+                               timeout=settings.CONNECT_TIMEOUT + 5)
         if p.returncode != 0:
-            raise RuntimeError(clean_stderr(p.stderr) or f"código de saída {p.returncode}")
-        return p.stdout.strip()
+            err = clean_stderr(decode_output(p.stderr))
+            raise RuntimeError((err or f"código de saída {p.returncode}") + hint_for(err))
+        return decode_output(p.stdout).strip()
 
     def test(self):
         """Executa uma consulta simples e devolve a versão do servidor."""
@@ -149,16 +149,13 @@ class MariaDBAdapter(Adapter):
     sgbd = "mariadb"
 
     @contextmanager
-    def _defaults_file(self):
+    def _defaults_file(self, tool=None):
         # A senha vai num arquivo temporário (0600) para não aparecer na
         # lista de processos nem em variáveis de ambiente.
         fd, path = tempfile.mkstemp(prefix="sentinela-", suffix=".cnf")
         try:
-            with os.fdopen(fd, "w") as f:
-                def q(v):
-                    return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
-                f.write(f"[client]\nuser={q(self.user)}\npassword={q(self.password)}\n"
-                        f"host={q(self.host)}\nport={int(self.port)}\n")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(self.defaults_text(tool))
             yield path
         finally:
             try:
@@ -166,10 +163,27 @@ class MariaDBAdapter(Adapter):
             except OSError:
                 pass
 
+    def defaults_text(self, tool=None):
+        def q(v):
+            return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+        text = (f"[client]\nuser={q(self.user)}\npassword={q(self.password)}\n"
+                f"host={q(self.host)}\nport={int(self.port)}\n")
+        plugins = plugin_dir(tool) if tool else None
+        if plugins:
+            # Plugins de autenticação do cliente (ex.: caching_sha2_password, padrão
+            # do MySQL 8+). Sem isso: "Plugin caching_sha2_password could not be loaded".
+            text += f"plugin-dir={q(plugins.as_posix())}\n"
+        if self.host in LOOPBACK:
+            # Grupo lido só pelos clientes MariaDB. Conexão local (ou pelo túnel SSH,
+            # que já é criptografado) a um MySQL com certificado autoassinado: os
+            # clientes MariaDB 11.4+ recusariam o TLS por não conseguir verificá-lo.
+            text += "[client-mariadb]\nssl-verify-server-cert=0\n"
+        return text
+
     @contextmanager
     def dump_cmd(self):
-        with self._defaults_file() as cnf:
-            tool = _which("mariadb-dump", "mysqldump", env="SENTINELA_MYSQLDUMP")
+        tool = _which("mariadb-dump", "mysqldump", env="SENTINELA_MYSQLDUMP")
+        with self._defaults_file(tool) as cnf:
             cmd = [tool, f"--defaults-extra-file={cnf}", "--protocol=TCP",
                    "--single-transaction", "--quick", "--routines", "--triggers",
                    "--events", "--add-drop-table", "--hex-blob"]
@@ -182,17 +196,17 @@ class MariaDBAdapter(Adapter):
 
     @contextmanager
     def restore_cmd(self):
-        with self._defaults_file() as cnf:
-            cmd = [_which("mariadb", "mysql", env="SENTINELA_MYSQL"),
-                   f"--defaults-extra-file={cnf}", "--protocol=TCP",
+        tool = _which("mariadb", "mysql", env="SENTINELA_MYSQL")
+        with self._defaults_file(tool) as cnf:
+            cmd = [tool, f"--defaults-extra-file={cnf}", "--protocol=TCP",
                    f"--connect-timeout={settings.CONNECT_TIMEOUT}", self.dbname]
             yield cmd, os.environ.copy()
 
     @contextmanager
     def query_cmd(self, sql):
-        with self._defaults_file() as cnf:
-            cmd = [_which("mariadb", "mysql", env="SENTINELA_MYSQL"),
-                   f"--defaults-extra-file={cnf}", "--protocol=TCP",
+        tool = _which("mariadb", "mysql", env="SENTINELA_MYSQL")
+        with self._defaults_file(tool) as cnf:
+            cmd = [tool, f"--defaults-extra-file={cnf}", "--protocol=TCP",
                    f"--connect-timeout={settings.CONNECT_TIMEOUT}", "-N", "-B", "-D", self.dbname, "-e", sql]
             yield cmd, os.environ.copy()
 
@@ -216,6 +230,21 @@ class MariaDBAdapter(Adapter):
 
 
 _tool_versions = {}
+
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def plugin_dir(tool):
+    """Pasta de plugins do cliente MariaDB/MySQL: ao lado do executável (versão
+    portátil) ou em ../lib/plugin (instalação padrão no Windows)."""
+    try:
+        base = Path(tool).resolve().parent
+    except (OSError, TypeError):
+        return None
+    for cand in (base / "plugin", base.parent / "lib" / "plugin"):
+        if (cand / f"caching_sha2_password{'.dll' if compat.IS_WINDOWS else '.so'}").exists():
+            return cand
+    return None
 
 
 def _is_mysql8_dump(tool):
@@ -251,6 +280,13 @@ PRIVILEGE_HINTS = (
     ("permission denied for",
      "o usuário do PostgreSQL não tem leitura em todos os objetos: "
      "GRANT pg_read_all_data TO usuario (PostgreSQL 14+) ou use o dono do banco"),
+    ("Plugin caching_sha2_password could not be loaded",
+     "o servidor é MySQL 8+ e o cliente não achou o plugin de login. Use a versão mais nova do "
+     "Sentinela (traz o plugin) ou instale o cliente do MariaDB/MySQL; outra saída é trocar o "
+     "usuário para mysql_native_password"),
+    ("self-signed certificate",
+     "o servidor usa certificado TLS autoassinado: conecte pelo túnel SSH (tela Conexão) "
+     "ou instale um certificado válido no servidor"),
     ("must be owner of",
      "para restaurar no PostgreSQL, use o dono do banco (ou um usuário com os mesmos privilégios)"),
 )
@@ -261,6 +297,23 @@ def hint_for(message):
         if needle.lower() in (message or "").lower():
             return f" — dica: {hint}"
     return ""
+
+
+def decode_output(data):
+    """Saída dos clientes do banco. Quase sempre UTF-8; no Windows, mensagens do
+    próprio sistema podem vir na página de código ANSI (ex.: cp1252)."""
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        import locale
+        enc = locale.getpreferredencoding(False) or "cp1252"
+        if enc.lower().replace("-", "") == "utf8":
+            enc = "cp1252"
+        return data.decode(enc, "replace")
 
 
 def clean_stderr(text, limit=400):

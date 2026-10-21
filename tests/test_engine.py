@@ -283,3 +283,42 @@ def test_lock_is_exclusive_between_handles(env, tmp_path):
     finally:
         os.close(a)
         os.close(b)
+
+
+def test_mariadb_client_gets_auth_plugin_dir(env, tmp_path, monkeypatch):
+    """MySQL 8+ usa caching_sha2_password: o cliente MariaDB precisa achar o plugin
+    (senão: "Plugin caching_sha2_password could not be loaded")."""
+    from sentinela import compat, dumpers
+    ext = ".dll" if compat.IS_WINDOWS else ".so"
+    # versão portátil: ferramentas/mariadb/{mariadb-dump.exe, plugin/}
+    port = tmp_path / "mariadb"
+    (port / "plugin").mkdir(parents=True)
+    (port / "plugin" / f"caching_sha2_password{ext}").write_text("")
+    a = dumpers.MariaDBAdapter({**MARIA, "host": "127.0.0.1"})
+    text = a.defaults_text(str(port / "mariadb-dump.exe"))
+    assert f'plugin-dir="{(port / "plugin").resolve().as_posix()}"' in text
+    # instalação padrão do Windows: bin/ e lib/plugin/
+    inst = tmp_path / "MariaDB 11.4"
+    (inst / "bin").mkdir(parents=True)
+    (inst / "lib" / "plugin").mkdir(parents=True)
+    (inst / "lib" / "plugin" / f"caching_sha2_password{ext}").write_text("")
+    assert "lib/plugin" in a.defaults_text(str(inst / "bin" / "mariadb.exe"))
+    # sem plugin por perto: não força nada (o cliente usa a pasta dele)
+    assert "plugin-dir" not in a.defaults_text(str(tmp_path / "outro" / "mariadb"))
+
+
+def test_tls_verification_relaxed_only_on_loopback(env):
+    from sentinela import dumpers
+    local = dumpers.MariaDBAdapter({**MARIA, "host": "127.0.0.1"}).defaults_text()
+    assert "[client-mariadb]\nssl-verify-server-cert=0" in local
+    remote = dumpers.MariaDBAdapter({**MARIA, "host": "db.empresa.com.br"}).defaults_text()
+    assert "ssl-verify-server-cert" not in remote
+
+
+def test_client_messages_decoded_utf8_or_ansi(env):
+    from sentinela import dumpers
+    msg = "Não foi possível encontrar o módulo especificado"
+    assert dumpers.decode_output(msg.encode("utf-8")) == msg
+    assert dumpers.decode_output(msg.encode("cp1252")) == msg
+    err = "ERROR 1156 (08S01): Plugin caching_sha2_password could not be loaded: x"
+    assert "MySQL 8+" in dumpers.hint_for(err)

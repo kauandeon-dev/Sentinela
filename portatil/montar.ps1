@@ -70,7 +70,17 @@ if ($mdb) {
     $md = "$Saida\ferramentas\mariadb"
     New-Item -ItemType Directory -Force $md | Out-Null
     Copy-Item "$($mdb.FullName)\mariadb.exe", "$($mdb.FullName)\mariadb-dump.exe" $md
-    # DLLs de que os dois executáveis dependem e que estão na pasta do MariaDB
+    # Plugins de autenticação do CLIENTE (caching_sha2_password é o padrão do MySQL 8+;
+    # sem ele: "Plugin caching_sha2_password could not be loaded")
+    $plugsrc = Join-Path (Split-Path $mdb.FullName) "lib\plugin"
+    New-Item -ItemType Directory -Force "$md\plugin" | Out-Null
+    foreach ($p in "caching_sha2_password", "sha256_password", "client_ed25519", "dialog",
+                   "mysql_clear_password", "auth_gssapi_client", "parsec", "pvio_npipe", "pvio_shmem") {
+        if (Test-Path "$plugsrc\$p.dll") { Copy-Item "$plugsrc\$p.dll" "$md\plugin" }
+    }
+    if (-not (Test-Path "$md\plugin\caching_sha2_password.dll")) { throw "Plugin caching_sha2_password.dll não encontrado em $plugsrc" }
+    Write-Host ("   plugins: " + ((Get-ChildItem "$md\plugin").Name -join ", "))
+    # DLLs de que os executáveis e os plugins dependem e que estão na pasta do MariaDB
     python -m pip install --disable-pip-version-check -q pefile
     python "$repo\portatil\dlls.py" "$md" "$($mdb.FullName)"
     "Clientes do MariaDB (GPLv2). Código-fonte: https://mariadb.org/download/" |

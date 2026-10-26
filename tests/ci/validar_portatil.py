@@ -20,6 +20,10 @@ def check(cond, msg):
     if not cond:
         print("---- janela do Sentinela ----")
         print(log.read_text(encoding="utf-8", errors="replace") if log.exists() else "(vazia)")
+        seg = root / "dados" / "logs" / "segundo-plano.log"
+        if seg.exists():
+            print("---- segundo plano ----")
+            print(seg.read_text(encoding="utf-8", errors="replace"))
         raise SystemExit(1)
 
 
@@ -207,6 +211,11 @@ def pythonw_running():
 
 
 check(call("POST", "/api/login", {"username": "admin", "password": pw})[0] == 200, "login no painel")
+# O teste do MySQL deixou a conexão nele: volta para o banco da demonstração,
+# que o segundo plano precisa subir sozinho
+demo_conn = {"sgbd": "postgres", "host": "127.0.0.1", "port": "5433", "dbname": "loja_demo",
+             "user": "backup_user", "password": "demo123"}
+check(call("PUT", "/api/connection", demo_conn)[0] == 200, "conexão de volta ao banco da demonstração")
 st = call("GET", "/api/servico")[1]["servico"]
 check(st["supported"] and not st["enabled"] and not st["background"], f"segundo plano ainda desativado: {st}")
 code, r = call("POST", "/api/servico", {"enabled": True})

@@ -135,7 +135,7 @@ class BackupError(Exception):
 
 # ======================================================================= setup
 
-def setup_logging():
+def setup_logging(console=True):
     settings.ensure_dirs()
     if any(isinstance(h, RotatingFileHandler) for h in log.handlers):
         return
@@ -145,9 +145,10 @@ def setup_logging():
                              backupCount=5, encoding="utf-8")
     fh.setFormatter(logging.Formatter("%(asctime)s  %(message)s", "%Y-%m-%d %H:%M:%S"))
     log.addHandler(fh)
-    sh = logging.StreamHandler()
-    sh.setFormatter(logging.Formatter("[sentinela] %(message)s"))
-    log.addHandler(sh)
+    if console:
+        sh = logging.StreamHandler()
+        sh.setFormatter(logging.Formatter("[sentinela] %(message)s"))
+        log.addHandler(sh)
 
 
 def key():

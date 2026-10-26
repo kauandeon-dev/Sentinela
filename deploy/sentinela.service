@@ -16,6 +16,7 @@ Environment=SENTINELA_HOME=/var/lib/sentinela
 Environment=SENTINELA_BACKUP_DIR=/var/backups/sentinela
 Environment=SENTINELA_BIND=127.0.0.1
 Environment=SENTINELA_PORT=8080
+Environment="SENTINELA_GERENCIADO=serviço systemd do sistema (inicia com o computador)"
 ExecStart=/opt/sentinela/.venv/bin/python -m sentinela serve
 Restart=on-failure
 UMask=0077

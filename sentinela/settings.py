@@ -35,6 +35,11 @@ CONNECT_TIMEOUT = int(os.environ.get("SENTINELA_CONNECT_TIMEOUT", "30"))
 
 # Intervalo de verificação do agendador (segundos).
 SCHEDULER_TICK = int(os.environ.get("SENTINELA_TICK", "30"))
+# Espera (s) após iniciar antes de rodar um backup atrasado (rede e banco
+# subindo junto com o computador) e novas tentativas do backup automático.
+STARTUP_GRACE = int(os.environ.get("SENTINELA_STARTUP_GRACE", "60"))
+AUTO_RETRIES = 3
+AUTO_RETRY_MINUTES = int(os.environ.get("SENTINELA_RETRY_MINUTES", "10"))
 
 # Cópias externas (regra 3-2-1): tentativas por destino em cada envio e
 # espera (s) entre elas. Envios que falharem são retomados a cada hora.

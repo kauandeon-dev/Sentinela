@@ -151,6 +151,126 @@ for _ in range(120):
     time.sleep(1)
 check("ouvindo em" in text and "Criando o banco" not in text and "Primeiro acesso" not in text,
       "segunda abertura reaproveita banco, usuário e configuração")
+url = re.search(r"Painel: (http://\S+?)/?\s", text).group(1)
+
+# ------------------------------------------------------------ segundo plano
+# "Iniciar com o computador" pelo painel: registra na chave Executar do
+# usuário (sem administrador), a janela passa a vez para um pythonw sem janela
+# no mesmo endereço; depois, desligar e ligar o PC depois da meia-noite.
+import http.cookiejar  # noqa: E402
+import json  # noqa: E402
+import sqlite3  # noqa: E402
+import urllib.request  # noqa: E402
+import winreg  # noqa: E402
+
+jar = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+
+def call(method, path, data=None):
+    req = urllib.request.Request(url + path, method=method, headers={"Content-Type": "application/json"},
+                                 data=json.dumps(data).encode() if data is not None else None)
+    try:
+        with jar.open(req, timeout=30) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+
+def up():
+    try:
+        return call("GET", "/api/me")[0] == 200
+    except OSError:
+        return False
+
+
+def wait(cond, timeout=90):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        v = cond()
+        if v:
+            return v
+        time.sleep(1)
+    return None
+
+
+def run_key():
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as k:
+            return winreg.QueryValueEx(k, "Sentinela")[0]
+    except OSError:
+        return None
+
+
+def pythonw_running():
+    out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq pythonw.exe"], capture_output=True, text=True).stdout
+    return "pythonw.exe" in out
+
+
+check(call("POST", "/api/login", {"username": "admin", "password": pw})[0] == 200, "login no painel")
+st = call("GET", "/api/servico")[1]["servico"]
+check(st["supported"] and not st["enabled"] and not st["background"], f"segundo plano ainda desativado: {st}")
+code, r = call("POST", "/api/servico", {"enabled": True})
+check(code == 200 and r.get("handoff"), f"ativar 'Iniciar com o computador' pelo painel: {r}")
+cmdline = run_key()
+expected = f'"{root}\\python\\pythonw.exe" "{root}\\app\\portatil.py" --servico'
+check(cmdline == expected, f"registrado em HKCU\\...\\Run: {cmdline}")
+check(wait(lambda: proc.poll() is not None, 90) is not None, "a janela do Sentinela fecha sozinha")
+janela = log.read_text(encoding="utf-8", errors="replace")
+check("passou a rodar em segundo plano" in janela, "a janela avisa que passou para o segundo plano")
+st = wait(lambda: up() and call("GET", "/api/servico")[1]["servico"])
+check(bool(st) and st["background"] and st["url"].rstrip("/") == url,
+      f"painel no mesmo endereço, agora em segundo plano: {st}")
+check(pythonw_running(), "processo sem janela (pythonw.exe)")
+check(wait(pg_running, 60), "banco de demonstração ligado pelo segundo plano")
+
+r = subprocess.run(["cmd", "/c", str(root / "Sentinela.bat")], capture_output=True, env=env,
+                   stdin=subprocess.DEVNULL, timeout=120)
+saida = r.stdout.decode("utf-8", "replace")
+check("já está rodando em segundo plano" in saida and url in saida,
+      "Sentinela.bat com o segundo plano rodando só abre o painel: " + saida.strip().replace("\r\n", " | "))
+
+# "Desligar o computador"
+r = subprocess.run(["cmd", "/c", str(root / "Parar-Sentinela.bat")], capture_output=True, env=env,
+                   stdin=subprocess.DEVNULL, timeout=600)
+saida = r.stdout.decode("utf-8", "replace")
+check("Sentinela encerrado" in saida and not up(), "Parar-Sentinela.bat encerra o segundo plano: "
+      + saida.strip().replace("\r\n", " | "))
+check(wait(lambda: not pg_running(), 30), "banco de demonstração desligado junto")
+
+# "Ligar depois da meia-noite": o backup agendado ficou para trás
+db = sqlite3.connect(root / "dados" / "sentinela.db")
+db.execute("UPDATE settings SET value=? WHERE key='next_run_at'", (json.dumps("2020-01-01 00:00:00"),))
+db.commit()
+db.close()
+antes = len(list((root / "backups").glob("loja_demo_*.sql.gz.enc")))
+# O Windows executa o valor da chave Executar ao entrar; mesmo comando aqui
+boot_env = dict(env, SENTINELA_STARTUP_GRACE="5", SENTINELA_TICK="2")
+subprocess.Popen(cmdline, env=boot_env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                 stderr=subprocess.DEVNULL)
+check(wait(up, 120), "ao 'entrar no Windows', o painel sobe sozinho")
+check(call("POST", "/api/login", {"username": "admin", "password": pw})[0] == 200, "login")
+
+
+def auto_ok():
+    bs = call("GET", "/api/backups")[1]["backups"]
+    done = [b for b in bs if b["trigger"] == "auto" and b["status"] != "running"]
+    return done[0] if done else None
+
+
+b = wait(auto_ok, 240)
+check(bool(b) and b["status"] == "success", f"backup automático atrasado feito sozinho: {b and b['id']}")
+check(len(list((root / "backups").glob("loja_demo_*.sql.gz.enc"))) == antes + 1, "nova cópia na pasta backups")
+main_log = (root / "dados" / "logs" / "sentinela.log").read_text(encoding="utf-8", errors="replace")
+check("Backup automático atrasado" in main_log, "log registra que era o backup da meia-noite perdida")
+check((root / "dados" / "logs" / "segundo-plano.log").exists(), "saída do segundo plano em dados\\logs")
+check(pythonw_running(), "rodando sem janela (pythonw.exe)")
+
+# Desativar e encerrar pelo painel
+code, r = call("POST", "/api/servico", {"enabled": False})
+check(code == 200 and not r["servico"]["enabled"] and run_key() is None, "desativar remove da chave Executar")
+check(call("POST", "/api/servico/encerrar")[0] == 200, "botão Encerrar")
+check(wait(lambda: not up(), 60), "painel encerrado")
+check(wait(lambda: not pg_running(), 60), "banco de demonstração desligado ao encerrar")
 subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
 subprocess.run([str(pg_ctl), "stop", "-D", str(demo), "-m", "fast"], capture_output=True)
 print("Versão portátil validada.")

@@ -20,10 +20,19 @@ COMO USAR
    Trocar-Senha.bat    -> troca a senha do usuário admin.
    Descriptografar.bat -> arraste uma cópia (.sql.gz.enc) para cima dele e
                           o .sql sem criptografia sai ao lado do arquivo.
+   Parar-Sentinela.bat -> encerra o Sentinela que roda em segundo plano.
 
 4. O navegador abre sozinho no painel. Usuário: admin
    A senha aparece na janela preta na primeira vez (anote!).
-5. Deixe a janela preta aberta enquanto usa. Para encerrar, feche a janela.
+5. Configure a conexão e a política de backup. Depois, em Política de backup >
+   Execução em segundo plano, ligue "Iniciar com o computador":
+   - a janela preta fecha sozinha e o Sentinela continua rodando SEM JANELA;
+   - toda vez que você entrar no Windows ele abre sozinho (não precisa de
+     administrador) e faz os backups no horário;
+   - se o PC estava desligado à meia-noite, o backup é feito assim que ele ligar.
+   Com ele em segundo plano, o Sentinela.bat só abre o painel no navegador.
+   Sem essa opção, deixe a janela preta aberta enquanto usa. Para encerrar,
+   feche a janela.
 
 Se o Windows mostrar "O Windows protegeu o computador":
 clique em "Mais informações" > "Executar assim mesmo".
@@ -50,6 +59,8 @@ DICAS
 - Se a porta 8080 estiver ocupada, o Sentinela usa a próxima livre (8081...).
   O endereço certo aparece na janela preta.
 - Para conectar num MariaDB/MySQL, os clientes já vêm em ferramentas\mariadb.
-- Os backups automáticos só acontecem com a janela aberta (o computador
-  precisa estar ligado à meia-noite). Para um servidor de verdade, veja o
-  README: instalação como tarefa do Windows ou Docker.
+- Com "Iniciar com o computador" ligado, os backups continuam depois de
+  reiniciar o PC. Se mover esta pasta de lugar, abra o Sentinela.bat uma vez
+  na pasta nova para o início automático se atualizar.
+- O que o Sentinela faz em segundo plano fica em dados\logs\segundo-plano.log
+  e na tela Logs do painel.

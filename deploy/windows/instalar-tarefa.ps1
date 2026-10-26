@@ -21,6 +21,7 @@ $cmd = Join-Path $Dados "iniciar-servico.cmd"
 set SENTINELA_HOME=$Dados
 set SENTINELA_BACKUP_DIR=$Backups
 set SENTINELA_PORT=$Porta
+set SENTINELA_GERENCIADO=tarefa agendada do Windows (inicia com o computador)
 set PYTHONUTF8=1
 cd /d "$raiz"
 "$python" -m sentinela serve >> "$Dados\servico.log" 2>&1

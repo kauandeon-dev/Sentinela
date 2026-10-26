@@ -236,8 +236,12 @@ flowchart LR
 ### 4.6 Agendamento e retenção
 
 - **Diário:** todo dia à meia-noite (horário do servidor). **Intervalo:** a cada *N* dias, à meia-noite.
-- Se o servidor estava desligado no horário, o backup roda assim que o Sentinela volta e o próximo
-  é reagendado normalmente.
+- Se o computador estava desligado no horário, o backup roda assim que o Sentinela volta (60 s
+  depois de iniciar, para a rede e o banco subirem junto) e o próximo é reagendado normalmente.
+  Com o [início automático](#54-iniciar-com-o-computador-segundo-plano), isso acontece sozinho ao
+  ligar o computador.
+- **Backup automático que falha** (rede ou banco fora do ar) é tentado de novo em 10 minutos, até
+  3 vezes; depois, só no próximo horário — e o aviso de falha é enviado.
 - **Uma execução por vez:** backups, restaurações e verificações nunca rodam em paralelo — nem entre
   o painel e um `sentinela backup` disparado pelo cron (trava de arquivo entre processos).
 - **Retenção:** cópias mais antigas que *N* dias (1 a 10) são apagadas após cada backup e a cada hora
@@ -294,10 +298,17 @@ sistema e roda até de pendrive. Usa por volta de 100 MB de RAM.
 | **`Sentinela.bat`** | Uso normal: configure a conexão com o seu banco na tela Conexão |
 | **`Trocar-Senha.bat`** | Troca a senha do `admin` |
 | **`Descriptografar.bat`** | **Arraste** uma ou mais cópias (`.sql.gz.enc`) para cima dele: o `.sql` sem criptografia sai ao lado de cada uma. Com dois cliques (sem arrastar), recupera a cópia mais recente de cada banco |
+| **`Parar-Sentinela.bat`** | Encerra o Sentinela que está rodando em segundo plano (ou use o botão no painel) |
 
 4. O navegador abre sozinho. Usuário `admin`; a senha aparece na janela preta na primeira vez.
-   Deixe a janela aberta enquanto usa; para encerrar, feche-a (o banco de demonstração é desligado
-   junto).
+5. Configure a conexão e a política. Depois, em **Política de backup → Execução em segundo
+   plano**, ligue **Iniciar com o computador**: a janela preta fecha sozinha, o Sentinela continua
+   rodando **sem janela** e passa a abrir sozinho toda vez que você entrar no Windows (não precisa
+   de administrador). O banco de demonstração, se for o banco configurado, sobe junto.
+   Sem isso, deixe a janela aberta enquanto usa; para encerrar, feche-a (o banco de demonstração é
+   desligado junto).
+6. Com o Sentinela em segundo plano, os atalhos `Sentinela.bat`/`Sentinela-Demo.bat` só abrem o
+   painel no navegador.
 
 Detalhes:
 
@@ -307,14 +318,19 @@ Detalhes:
 | Porta | 8080 ou a próxima livre (o endereço aparece na janela) |
 | Banco de demonstração | PostgreSQL · `127.0.0.1:5433` · banco `loja_demo` · usuário `backup_user` · senha `demo123`. Os arquivos ficam em `%LOCALAPPDATA%\SentinelaDemo` — ou, se o nome do usuário tiver acento, em `C:\ProgramData\SentinelaDemo` (o PostgreSQL não funciona em caminhos com acento no Windows; o Sentinela escolhe sozinho). Apague a pasta para recomeçar a demonstração do zero |
 | Aviso "O Windows protegeu o computador" | *Mais informações* → *Executar assim mesmo* (ou desbloqueie o ZIP antes de extrair) |
-| Backups automáticos | Só acontecem com a janela aberta. Para um servidor que fica sempre ligado, use a [tarefa do Windows](#52-windows-sem-docker) ou o Docker |
+| Backups automáticos | Com **Iniciar com o computador** ligado, rodam sozinhos ao entrar no Windows, sem janela — e o da meia-noite que ficou para trás com o PC desligado roda assim que ele liga. Sem a opção, só com a janela aberta. Se a pasta portátil mudar de lugar, o início automático se atualiza na próxima vez que ela for aberta |
+| Logs do segundo plano | `dados\logs\segundo-plano.log` (além do `sentinela.log` e da tela Logs) |
 
 O pacote é montado pelo [`portatil/montar.ps1`](portatil/montar.ps1) e, a cada alteração, o
 GitHub Actions o **testa num Windows sem PostgreSQL e sem Python instalados**, numa pasta com
 espaço e acento e simulando um aluno com acento no nome de usuário: abre o `Sentinela-Demo.bat`,
 faz backup, cópia externa, verificação e restauração pelo painel, confere que o PostgreSQL é
 desligado ao encerrar, que o `Descriptografar.bat` devolve o SQL completo e que a segunda abertura
-reaproveita tudo — e só então publica o ZIP.
+reaproveita tudo. Depois liga **Iniciar com o computador** pelo painel e confere o registro na
+chave *Executar* do usuário, a janela fechando e o painel voltando no mesmo endereço como
+`pythonw.exe` (sem janela), o `Parar-Sentinela.bat`, e simula **desligar e ligar o PC depois da
+meia-noite**: executa o comando registrado e espera o backup atrasado ser feito sozinho — e só
+então publica o ZIP.
 
 ### 5.1 Docker — qualquer sistema (o mais fácil)
 
@@ -379,8 +395,11 @@ Testado em Windows Server 2022/2025 (o mesmo do Windows 10/11) com Python 3.12 e
 
    A janela mostra a senha do `admin`. Acesse `http://127.0.0.1:8080`. Os dados ficam em `.\data`
    e as cópias em `C:\ProgramData\Sentinela\backups` (troque no painel, ex.: `E:\Backups`).
-4. **Iniciar junto com o Windows** (sem precisar de ninguém logado) — PowerShell **como
-   Administrador**, na pasta do Sentinela:
+4. **Iniciar junto com o Windows** — duas opções:
+   - **Sem administrador:** no painel, **Política de backup → Iniciar com o computador**
+     ([seção 5.4](#54-iniciar-com-o-computador-segundo-plano)). Inicia ao entrar no Windows.
+   - **Antes de qualquer login** (servidor) — PowerShell **como Administrador**, na pasta do
+     Sentinela:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File deploy\windows\instalar-tarefa.ps1
@@ -486,6 +505,34 @@ server {
 }
 ```
 
+### 5.4 Iniciar com o computador (segundo plano)
+
+Depois de configurar conexão e política, ligue **Política de backup → Execução em segundo plano →
+Iniciar com o computador** (ou `python -m sentinela servico ativar`). A partir daí:
+
+- O Sentinela **abre sozinho** quando o computador liga, **sem janela**, e faz os backups no
+  horário. O painel continua no mesmo endereço (`http://127.0.0.1:8080`).
+- Se o computador estava **desligado à meia-noite**, o backup perdido roda assim que ele ligar
+  (depois de 60 s, para a rede e o banco subirem). Se falhar, tenta de novo a cada 10 min (3×).
+- Se ele estava aberto numa janela, **passa na hora para o segundo plano**: a janela fecha e o
+  painel volta sozinho em poucos segundos — sem esperar reiniciar.
+- **Uma instância por pasta de dados:** abrir de novo (`Sentinela.bat`, `serve`) só mostra o
+  endereço da que já está rodando.
+- **Encerrar:** botão *Encerrar o Sentinela agora* no mesmo cartão, `Parar-Sentinela.bat` (versão
+  portátil) ou `python -m sentinela servico parar`. Um backup em andamento termina antes.
+
+| Sistema | Como inicia | Administrador? |
+|---|---|---|
+| **Windows** | Valor *Sentinela* em `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, executando `pythonw.exe` (sem janela) ao entrar no Windows. Aparece como **Python** na aba *Inicializar* do Gerenciador de Tarefas — se for desativado lá, o painel avisa | Não |
+| **Linux** | Serviço systemd do usuário (`~/.config/systemd/user/sentinela.service`, `Restart=on-failure`) e `loginctl enable-linger` para iniciar no boot mesmo sem login, quando o sistema permite | Não |
+| **Docker** | `restart: unless-stopped` — basta o Docker iniciar com o computador (Docker Desktop: *Start when you sign in*) | — |
+| **Servidor Windows sem login** | [Tarefa agendada como SYSTEM](#52-windows-sem-docker) | Sim |
+| **Servidor Linux** | [Serviço do sistema](#como-serviço-systemd) | Sim |
+
+Nos três últimos casos o painel mostra quem cuida do início (variável `SENTINELA_GERENCIADO`) e
+não oferece a opção. A saída do processo em segundo plano vai para
+`$SENTINELA_HOME/logs/segundo-plano.log`.
+
 ---
 
 ## 6. Guia de uso — tela por tela
@@ -513,6 +560,10 @@ usuário): `python -m sentinela passwd admin`. Após 5 tentativas erradas o logi
 ### 6.3 Política de backup
 
 - **Agendamento:** *Diário à meia-noite* ou *Intervalo personalizado* (a cada 1–30 dias).
+- **Execução em segundo plano:** *Iniciar com o computador* (vale na hora, sem salvar), situação
+  atual (em segundo plano ou numa janela) e *Encerrar o Sentinela agora*
+  ([seção 5.4](#54-iniciar-com-o-computador-segundo-plano)). Enquanto estiver desligado, o Painel
+  avisa que os backups só acontecem com o Sentinela aberto.
 - **Retenção:** 1 a 10 dias.
 - **Diretório de armazenamento:** o mesmo da tela Conexão — a cópia local. As cópias em outro disco
   e fora do local (regra 3-2-1) são configuradas em **Cópias externas** ([seção 9](#9-cópias-externas-e-a-regra-3-2-1)).
@@ -801,6 +852,9 @@ python -m sentinela backup                       # backup imediato (cron/scripts
 python -m sentinela decrypt ARQUIVO...           # recupera o SQL sem o painel: .sql ao lado de cada cópia
 python -m sentinela decrypt ARQUIVO -o SAIDA.sql [--key CHAVE]   # outro nome ('-' = saída padrão)
 python -m sentinela sync                         # envia aos destinos externos o que estiver pendente
+python -m sentinela servico ativar               # inicia sozinho com o computador (e já sobe em segundo plano)
+python -m sentinela servico status|desativar|parar
+python -m sentinela serve --background           # sem janela, saída em logs/segundo-plano.log
 python -m sentinela key export -o ARQUIVO.key    # exporta a chave mestra (guarde fora do servidor)
 python -m sentinela key import ARQUIVO.key       # importa a chave de outra instalação (cópias antigas)
 python -m sentinela key id                       # identificador da chave atual
@@ -830,6 +884,9 @@ Se o painel já estiver executando algo, o comando termina com
 | `SENTINELA_HTTPS` | — | `1` quando publicado atrás de proxy HTTPS (cookie *Secure* e IP real via `X-Forwarded-For`) |
 | `SENTINELA_CONNECT_TIMEOUT` | `30` | Tempo máximo (s) para conectar ao banco e ao SSH |
 | `SENTINELA_TICK` | `30` | Intervalo (s) de verificação do agendador |
+| `SENTINELA_STARTUP_GRACE` | `60` | Espera (s) após iniciar antes de rodar um backup atrasado |
+| `SENTINELA_RETRY_MINUTES` | `10` | Intervalo das novas tentativas do backup automático que falhou (3×) |
+| `SENTINELA_GERENCIADO` | — | Quem já inicia o Sentinela com o computador (Docker, tarefa, systemd do sistema): o painel não oferece o início automático |
 | `SENTINELA_NET_TIMEOUT` | `20` | Tempo-limite (s) de rede dos destinos externos e dos avisos |
 | `SENTINELA_REPLICA_ATTEMPTS` | `3` | Tentativas por destino em cada envio |
 | `SENTINELA_REPLICA_BACKOFF` | `5,20` | Esperas (s) entre as tentativas |
@@ -844,9 +901,12 @@ $SENTINELA_HOME/                  (0700 — só o usuário do serviço)
 ├── sentinela.db                  configurações, usuários, histórico, logs
 ├── sentinela.key                 chave mestra AES-256 (0600) — FAÇA UMA CÓPIA FORA DO SERVIDOR
 ├── sentinela.lock                trava de execução entre processos
+├── painel.lock · painel.json     instância em execução e o endereço do painel
+├── sentinela-segundo-plano.pyw   lançador do início automático (instalação com venv)
 ├── chaves/                       chaves mestras importadas de outras instalações
 └── logs/
     ├── sentinela.log             log geral (rotativo)
+    ├── segundo-plano.log         saída do processo sem janela
     └── execucoes/                um .log por execução
 
 $SENTINELA_BACKUP_DIR/            (0700)
@@ -950,6 +1010,9 @@ seção 4.3) **e a chave**.
 | `O arquivo da cópia … está em uso por outro programa` (Windows) | Download em andamento ou antivírus lendo o arquivo | Espere o download terminar e tente de novo; a retenção tenta sozinha na próxima hora |
 | `Cliente 'pg_dump' não encontrado` (Windows) | PostgreSQL instalado fora de `C:\Program Files` | Informe o caminho em `SENTINELA_PG_DUMP` e `SENTINELA_PSQL` |
 | `Unknown table 'column_statistics'` | `mysqldump` antigo do MySQL contra MariaDB | Atualize o Sentinela (já corrigido) ou instale o cliente do MariaDB |
+| Backups pararam depois de reiniciar o computador | Início automático desligado ou desativado no Gerenciador de Tarefas | Painel → *Saúde da proteção* mostra a causa; ligue em **Política de backup → Iniciar com o computador** |
+| `O Sentinela já está rodando com esta pasta de dados: …` | Outra instância (janela ou segundo plano) já usa os mesmos dados | Use o endereço mostrado, ou encerre: `python -m sentinela servico parar` |
+| `Não foi possível usar o systemd do usuário` (Linux) | Sessão sem systemd do usuário (SSH, contêiner) | Use o serviço do sistema (`deploy/sentinela.service`) |
 | Docker: o painel não abre / `iniciar.bat` diz que o Docker não está aberto | Docker Desktop fechado | Abra o Docker Desktop e espere ficar *running* |
 | Docker: não conecta no banco em `localhost` | Dentro do contêiner `localhost` é o próprio contêiner | Use `host.docker.internal` (e libere o banco para a rede do Docker) |
 | Erros de destino externo | ver [seção 9.3](#93-mensagens-de-erro-dos-destinos) | |
@@ -964,7 +1027,7 @@ seção 4.3) **e a chave**.
 
 ```bash
 pip install -r requirements-dev.txt       # pytest, moto (S3 falso) e aiosmtpd (SMTP falso)
-python -m pytest -q tests                 # 141 testes
+python -m pytest -q tests                 # 161 testes
 ```
 
 ### Testes automáticos a cada alteração (GitHub Actions)
@@ -976,7 +1039,7 @@ O workflow [`.github/workflows/testes.yml`](.github/workflows/testes.yml) roda s
 | **Windows** · Python 3.12 e 3.13 | Suíte completa com PostgreSQL 17 e MariaDB reais, **sem** os clientes no PATH (prova a busca automática em `C:\Program Files`), e um teste de fumaça com o painel rodando de verdade: login, conexão, backup, cópia externa, verificação e restauração |
 | **Ubuntu** · Python 3.12 | Suíte completa com PostgreSQL + o mesmo teste de fumaça |
 | **Docker** | Constrói a imagem, sobe ao lado de um PostgreSQL 17 com pastas montadas pertencentes ao root (pior caso) e roda o teste de fumaça dentro do contêiner |
-| **Versão portátil** ([`portatil.yml`](.github/workflows/portatil.yml)) | Monta o ZIP no Windows, extrai num Windows **sem PostgreSQL e sem Python**, em `C:\Teste Portátil`, com o perfil do usuário em `C:\Usuários\João`, e valida o `Sentinela-Demo.bat` de ponta a ponta; se passar, publica em Releases |
+| **Versão portátil** ([`portatil.yml`](.github/workflows/portatil.yml)) | Monta o ZIP no Windows, extrai num Windows **sem PostgreSQL e sem Python**, em `C:\Teste Portátil`, com o perfil do usuário em `C:\Usuários\João`, e valida o `Sentinela-Demo.bat` de ponta a ponta — inclusive o **início automático** (chave *Executar*, `pythonw.exe` sem janela, desligar e ligar o PC com o backup da meia-noite perdido); se passar, publica em Releases |
 
 Os testes de SSH/SFTP usam o servidor simulado abaixo (namespace de rede Linux) e rodam no
 ambiente de desenvolvimento; no Windows eles são ignorados.
@@ -1007,6 +1070,7 @@ automaticamente (os unitários continuam rodando).
 | `test_replication.py` | Cópias externas em disco e S3: regra 3-2-1, falhas e recuperação (abaixo) |
 | `test_replication_sftp.py` | Cópias externas por SFTP contra o servidor remoto real |
 | `test_notify.py` | Avisos por e-mail (SMTP real local), Telegram e webhook (APIs simuladas) |
+| `test_servico.py` | Instância única, pedido de parada, porta ocupada, serviço systemd do usuário (lançador, pasta movida, sem systemd), novas tentativas e espera pós-boot do agendador, API — e de ponta a ponta: janela → segundo plano no mesmo endereço → "desliga" → "liga" depois da meia-noite → backup atrasado feito sozinho |
 
 ### Cenários de falha das cópias externas e dos avisos
 
@@ -1082,7 +1146,7 @@ layout de celular.
 
 ```
 sentinela/
-├── __main__.py    linha de comando (serve, passwd, backup, decrypt, sync, key)
+├── __main__.py    linha de comando (serve, passwd, backup, decrypt, sync, servico, key)
 ├── compat.py      diferenças Linux/Windows: arquivos binários, trava, permissões (ACL), console
 ├── engine.py      backup, verificação, restauração, retenção, logs, progresso, travas
 ├── replication.py cópias externas: envio conferido, retomada, exclusão, busca, importação, regra 3-2-1
@@ -1091,7 +1155,8 @@ sentinela/
 ├── dumpers.py     adaptadores PostgreSQL e MariaDB, pré-verificação, dicas de permissão
 ├── tunnel.py      túnel SSH (paramiko): chave do host, encaminhamento, detecção de queda
 ├── crypto.py      AES-256-GCM em fluxo, chave mestra, segredos
-├── scheduler.py   agendador (diário/intervalo) e manutenção de hora em hora
+├── scheduler.py   agendador (diário/intervalo), backup atrasado, novas tentativas, manutenção
+├── servico.py     segundo plano: instância única, início automático (Windows/Linux), encerrar
 ├── storage.py     SQLite
 ├── settings.py    caminhos e limites
 ├── web.py         API JSON, checklist de saúde, cabeçalhos de segurança
@@ -1126,6 +1191,8 @@ Endpoints (todos exigem sessão, exceto login):
 | POST | `/api/destinations/test` · `/sync` · `/<id>/import` | Testar destino / sincronizar pendentes / procurar cópias |
 | GET · PUT | `/api/notifications` · POST `/api/notifications/test` | Configuração e histórico dos avisos / envio de teste |
 | POST | `/api/key/export` | Baixar a chave mestra (exige a senha do usuário) |
+| GET · POST | `/api/servico` | Situação do segundo plano / ligar ou desligar o início automático (passa a janela para o segundo plano) |
+| POST | `/api/servico/encerrar` | Encerrar o Sentinela (depois da execução em andamento) |
 
 ---
 

@@ -14,7 +14,7 @@ from werkzeug.security import check_password_hash
 from io import BytesIO
 
 from . import (__version__, crypto, destinations, dumpers, engine, notify, replication,
-               settings, storage)
+               servico, settings, storage)
 
 STATIC = Path(__file__).parent / "static"
 
@@ -131,6 +131,7 @@ def create_app():
         except OSError:
             pass
         nxt = engine.next_run_at()
+        svc = servico.status()
         history = storage.rows(
             "SELECT id, created_at, trigger, status, size, raw_size, duration FROM backups "
             "WHERE status != 'running' ORDER BY created_at DESC LIMIT 14")[::-1]
@@ -157,7 +158,8 @@ def create_app():
             notify_channels=notify.public(notify.get_config())["active"],
             key_id=engine.key_id(),
             key_exported_at=storage.get_setting("key_exported_at"),
-            health=_health(policy, conn, ok, disk, interval),
+            servico=svc,
+            health=_health(policy, conn, ok, disk, interval, svc),
             limits={"retention": [settings.RETENTION_MIN, settings.RETENTION_MAX],
                     "interval": [settings.INTERVAL_MIN, settings.INTERVAL_MAX]},
         )
@@ -399,6 +401,39 @@ def create_app():
     def test_notifications():
         return jsonify(results=notify.send_test(body(), engine.key()))
 
+    # ------------------------------------------------------------ segundo plano
+
+    @app.get("/api/servico")
+    @login_required
+    def get_servico():
+        return jsonify(servico=servico.status())
+
+    @app.post("/api/servico")
+    @login_required
+    def set_servico():
+        enabled = bool(body().get("enabled"))
+        try:
+            st = servico.install() if enabled else servico.uninstall()
+        except RuntimeError as e:
+            return jsonify(error=str(e)), 400
+        engine.log.info("Início automático %s por '%s'", "ativado" if enabled else "desativado",
+                        session["user"])
+        # Aberto numa janela: passa a rodar em segundo plano já, sem esperar o
+        # próximo boot — a janela pode ser fechada e o painel continua no ar.
+        inst = servico.running_instance() or {}
+        handoff = bool(enabled and inst.get("port") and not servico.BACKGROUND)
+        if handoff:
+            servico.switch_to_background(inst["port"])
+        return jsonify(servico=st, handoff=handoff)
+
+    @app.post("/api/servico/encerrar")
+    @login_required
+    def stop_servico():
+        if not servico.request_stop():
+            return jsonify(error="Nenhuma instância do Sentinela registrada nesta pasta de dados"), 409
+        engine.log.info("Encerramento pedido por '%s'", session["user"])
+        return jsonify(ok=True, waiting=engine.is_busy())
+
     # ------------------------------------------------------------- chave mestra
 
     @app.post("/api/key/export")
@@ -475,12 +510,27 @@ def _current_view():
     return cur
 
 
-def _health(policy, conn, ok, disk, interval):
+def _health(policy, conn, ok, disk, interval, svc=None):
     """Checklist de saúde da proteção exibido no painel."""
     items = []
 
     def add(state, title, detail):
         items.append({"state": state, "title": title, "detail": detail})
+
+    if svc and engine.connection_ready(conn):
+        if svc["managed"]:
+            add("ok", "Inicia com o computador", f"Gerenciado por {svc['managed']}.")
+        elif svc["enabled"] and svc["blocked"]:
+            add("err", "Início automático bloqueado",
+                "Desativado na aba Inicializar do Gerenciador de Tarefas: reative \"Python\" "
+                "(Sentinela) ali, ou desative e ative de novo em Política de backup.")
+        elif svc["enabled"]:
+            add("ok", "Inicia com o computador", f"{svc['how']}. Backups perdidos com o computador "
+                "desligado rodam assim que ele for ligado.")
+        elif svc["supported"]:
+            add("warn", "Backups só com o Sentinela aberto",
+                "Ative \"Iniciar com o computador\" em Política de backup para continuar "
+                "fazendo backups depois de desligar e ligar o computador.")
 
     last_ok = ok[0] if ok else None
     if not engine.connection_ready(conn):

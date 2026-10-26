@@ -34,7 +34,8 @@ ENV SENTINELA_HOME=/dados \
     SENTINELA_BIND=0.0.0.0 \
     SENTINELA_PORT=8080 \
     TZ=America/Sao_Paulo \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    SENTINELA_GERENCIADO="Docker (reinicia sozinho com o Docker)"
 
 VOLUME ["/dados", "/backups"]
 EXPOSE 8080

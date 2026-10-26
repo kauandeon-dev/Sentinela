@@ -6,6 +6,8 @@
     python -m sentinela decrypt ARQ...     recupera o SQL de cópias sem o painel (.sql ao lado;
                                            -o SAIDA.sql para outro nome)
     python -m sentinela sync               envia ao(s) destino(s) externo(s) o que estiver pendente
+    python -m sentinela servico ativar     inicia sozinho com o computador, em segundo plano
+    python -m sentinela servico parar      encerra o que está rodando (status · desativar)
     python -m sentinela key export -o ARQ  exporta a chave mestra (guarde fora do servidor)
     python -m sentinela key import ARQ     importa a chave de outra instalação (ler cópias antigas)
     python -m sentinela key id             mostra o identificador da chave atual
@@ -16,6 +18,7 @@ import os
 import getpass
 import secrets
 import sys
+import time
 import zlib
 
 from werkzeug.security import generate_password_hash
@@ -24,10 +27,25 @@ from . import __version__, compat, crypto, engine, settings, storage
 
 
 def cmd_serve(args):
+    from . import servico
     from .scheduler import Scheduler
     from .web import create_app
 
-    engine.setup_logging()
+    servico.handle_interrupt()
+    if args.background:
+        servico.background_mode()
+    # Uma instância por pasta de dados. Em segundo plano, espera a janela que
+    # pediu a troca sair (ela libera a pasta e a porta em poucos segundos).
+    if not servico.acquire_instance(wait=60 if args.background else 0):
+        inst = servico.running_instance() or {}
+        msg = (f"O Sentinela já está rodando com esta pasta de dados ({settings.HOME})"
+               + (f": {inst['url']}" if inst.get("url") else "."))
+        if args.background:
+            print(msg, flush=True)
+            return
+        sys.exit(msg + "\nPara encerrá-lo: python -m sentinela servico parar")
+
+    engine.setup_logging(console=not args.background)
     storage.init()
     engine.key()
     engine.recover_interrupted()
@@ -43,16 +61,28 @@ def cmd_serve(args):
     print(f" Chave mestra: {settings.KEY_PATH}")
     print("  -> guarde uma cópia FORA do servidor; sem ela as cópias")
     print("     criptografadas não podem ser recuperadas.", flush=True)
+    try:
+        if servico.repair():
+            engine.log.info("Início automático atualizado para a pasta atual do Sentinela")
+    except Exception as e:  # nunca impede o painel de subir
+        engine.log.warning("Não foi possível conferir o início automático: %s", e)
 
+    host = args.host or settings.HOST
+    if args.port:
+        port = args.port
+    elif args.background:
+        port = servico.pick_port(host, servico.preferred_port(), wait=30)
+    else:
+        port = settings.PORT
     Scheduler().start()
     app = create_app()
-    host, port = args.host or settings.HOST, args.port or settings.PORT
-    engine.log.info("Sentinela %s ouvindo em http://%s:%s", __version__, host, port)
-    try:
-        from waitress import serve
-        serve(app, host=host, port=port, threads=8)
-    except ImportError:
-        app.run(host=host, port=port, threaded=True)
+    from waitress import create_server
+    server = create_server(app, host=host, port=port, threads=8)
+    shown = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    servico.started(f"http://{shown}:{port}/", port, servico.stop_self)
+    engine.log.info("Sentinela %s ouvindo em http://%s:%s%s", __version__, host, port,
+                    " (segundo plano)" if args.background else "")
+    server.run()
 
 
 def cmd_passwd(args):
@@ -159,6 +189,49 @@ def cmd_key(args):
               f"A chave {kid} já é a chave atual deste servidor.")
 
 
+def cmd_servico(args):
+    from . import servico
+    storage.init()
+    try:
+        if args.action == "ativar":
+            st = servico.install()
+            print(f"Início automático ativado: {st['how']}.")
+            if not servico.running_instance():
+                servico.spawn_background()
+                print("Sentinela iniciado em segundo plano.")
+        elif args.action == "desativar":
+            st = servico.uninstall()
+            print("Início automático desativado." if not st["enabled"] else "Nada a desativar.")
+            if servico.running_instance():
+                print("O Sentinela continua rodando até ser encerrado: python -m sentinela servico parar")
+        elif args.action == "parar":
+            if not servico.request_stop():
+                print("O Sentinela não está rodando com esta pasta de dados.")
+                return
+            for _ in range(600):
+                if servico.running_instance() is None:
+                    print("Sentinela encerrado.")
+                    return
+                time.sleep(0.5)
+            sys.exit("O Sentinela ainda não encerrou (backup em andamento?). Ele encerra ao terminar.")
+        else:
+            st = servico.status()
+            inst = servico.running_instance()
+            print(f"Rodando:           {'sim' + (' (segundo plano)' if st['background'] else ' (janela)') + ' · ' + (inst or {}).get('url', '') if inst is not None else 'não'}")
+            if st["managed"]:
+                print(f"Início automático: feito por {st['managed']}")
+            elif not st["supported"]:
+                print("Início automático: indisponível neste sistema (use o Docker)")
+            else:
+                print(f"Início automático: {'ativado' if st['enabled'] else 'desativado'} — {st['how']}")
+                if st["blocked"]:
+                    print("  ATENÇÃO: desativado na aba Inicializar do Gerenciador de Tarefas")
+                if st["other"]:
+                    print(f"  Registrado para outra instalação: {st['other']}")
+    except RuntimeError as e:
+        sys.exit(f"Erro: {e}")
+
+
 def _read_key(path):
     with open(path, "rb") as f:
         return f.read()
@@ -172,6 +245,8 @@ def main():
     s = sub.add_parser("serve", help="inicia o painel web e o agendador")
     s.add_argument("--host")
     s.add_argument("--port", type=int)
+    s.add_argument("--background", action="store_true",
+                   help="sem janela: saída em logs/segundo-plano.log (usado pelo início automático)")
     s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser("passwd", help="cria ou altera a senha de um usuário do painel")
@@ -190,6 +265,10 @@ def main():
 
     s = sub.add_parser("sync", help="envia aos destinos externos as cópias pendentes")
     s.set_defaults(fn=cmd_sync)
+
+    s = sub.add_parser("servico", help="execução em segundo plano e início automático")
+    s.add_argument("action", choices=["status", "ativar", "desativar", "parar"])
+    s.set_defaults(fn=cmd_servico)
 
     s = sub.add_parser("key", help="exporta/importa a chave mestra")
     s.add_argument("action", choices=["export", "import", "id"])

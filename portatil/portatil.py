@@ -8,6 +8,8 @@ nada e sem permissão de administrador. É chamado pelos atalhos .bat:
     Trocar-Senha.bat     python portatil.py --senha    troca a senha do admin
     Descriptografar.bat  python portatil.py --decrypt ARQ...
                                                        .sql ao lado de cada cópia arrastada
+    Parar-Sentinela.bat  python portatil.py --parar    encerra o que roda em segundo plano
+    (início automático)  pythonw portatil.py --servico sem janela, ao entrar no Windows
 
 Estrutura da pasta portátil:
 
@@ -68,6 +70,9 @@ def setup_env():
     plugins = TOOLS / "mariadb" / "plugin"
     if plugins.is_dir():
         os.environ.setdefault("MARIADB_PLUGIN_DIR", str(plugins))
+    # Início automático (segundo plano) chama este arquivo, onde quer que a
+    # pasta esteja: se ela mudar de lugar, o Sentinela atualiza o registro.
+    os.environ["SENTINELA_PORTATIL"] = str(APP / "portatil.py")
     if str(APP) not in sys.path:
         sys.path.insert(0, str(APP))
 
@@ -264,6 +269,14 @@ def _stop_on_exit(pg_ctl, data):
             pass
 
 
+def demo_in_use():
+    """A conexão configurada é o banco de demonstração desta pasta?"""
+    from sentinela import engine
+    c = engine.get_connection()
+    return (c.get("sgbd") == "postgres" and c.get("host") in ("127.0.0.1", "localhost")
+            and str(c.get("port")) == str(DEMO_PORT) and c.get("dbname") == DEMO_CONN["dbname"])
+
+
 def configure_demo_connection():
     """Na primeira vez, já deixa o Sentinela apontado para o banco de demonstração."""
     from sentinela import engine, storage
@@ -312,12 +325,52 @@ def decrypt(files):
         raise SystemExit(1)
 
 
+def run_service(cli):
+    """Início automático: sem janela (pythonw), ao entrar no Windows. Sobe o
+    banco de demonstração se ele é o banco configurado."""
+    from sentinela import servico, storage
+    servico.background_mode()
+    if not servico.acquire_instance(wait=60):
+        say("Outra instância do Sentinela já usa esta pasta: nada a fazer.")
+        return
+    say("=" * 64)
+    say(f" {time.strftime('%d/%m/%Y %H:%M:%S')}  Sentinela em segundo plano · {ROOT}")
+    storage.init()
+    if demo_in_use():
+        try:
+            start_demo()
+        except SystemExit as e:  # o painel sobe mesmo assim (o backup acusará a falha)
+            say(f"Banco de demonstração: {e}")
+    sys.argv = ["sentinela", "serve", "--background"]
+    cli.main()
+
+
+def stop_running():
+    from sentinela import servico
+    inst = servico.running_instance()
+    if inst is None:
+        say("O Sentinela não está rodando.")
+        return
+    say("Encerrando o Sentinela (um backup em andamento termina antes)...")
+    servico.request_stop()
+    for _ in range(1200):
+        if servico.running_instance() is None:
+            say("Sentinela encerrado. Os backups automáticos só voltam quando ele for aberto de novo")
+            say("(ou ao reiniciar o computador, se o início automático estiver ativo).")
+            return
+        time.sleep(0.5)
+    say("Ainda não encerrou: um backup demorado pode estar em andamento. Ele sai ao terminar.")
+
+
 def main():
     p = argparse.ArgumentParser(description="Sentinela portátil")
     p.add_argument("--demo", action="store_true", help="sobe também um banco de demonstração")
     p.add_argument("--senha", action="store_true", help="troca a senha do usuário admin")
     p.add_argument("--decrypt", nargs="*", metavar="ARQUIVO",
                    help="recupera o .sql de cópias (.sql.gz.enc), gravado ao lado de cada uma")
+    p.add_argument("--servico", action="store_true",
+                   help="segundo plano, sem janela (usado pelo início automático)")
+    p.add_argument("--parar", action="store_true", help="encerra o Sentinela que está rodando")
     args = p.parse_args()
 
     # Ctrl+C sempre encerra de forma limpa (mesmo se o processo foi iniciado com
@@ -330,7 +383,10 @@ def main():
 
     setup_env()
     from sentinela import __main__ as cli
-    from sentinela import compat
+    from sentinela import compat, servico
+    if args.servico:
+        run_service(cli)
+        return
     compat.utf8_console()
 
     if args.senha:
@@ -340,6 +396,19 @@ def main():
     if args.decrypt is not None:
         decrypt(args.decrypt)
         return
+    if args.parar:
+        stop_running()
+        return
+
+    # Já rodando (segundo plano ou outra janela): só abre o painel.
+    if not servico.acquire_instance():
+        inst = servico.running_instance() or {}
+        where = "em segundo plano" if inst.get("background") else "em outra janela"
+        say(f"O Sentinela já está rodando {where}: {inst.get('url', '')}")
+        if inst.get("url") and not os.environ.get("SENTINELA_NO_BROWSER"):
+            say("Abrindo o painel no navegador...")
+            webbrowser.open(inst["url"])
+        raise SystemExit(3)
 
     say("=" * 64)
     say(" SENTINELA — versão portátil")
@@ -359,6 +428,12 @@ def main():
     url = f"http://127.0.0.1:{port}/"
     say("")
     say(f" Painel: {url}  (abre sozinho no navegador)")
+    st = servico.status()
+    if st["enabled"]:
+        say(" Início automático ativo: ao ligar o computador, ele volta sozinho em segundo plano.")
+    else:
+        say(" Para os backups continuarem depois de fechar esta janela ou reiniciar o PC:")
+        say(" Política de backup > Execução em segundo plano > Iniciar com o computador.")
     say(" Deixe esta janela aberta enquanto usa o Sentinela.")
     say(" Para encerrar: feche esta janela ou pressione Ctrl+C.")
     say("")
@@ -368,6 +443,11 @@ def main():
         cli.main()
     except KeyboardInterrupt:
         say("Encerrando...")
+    if servico.handed_off:
+        say("")
+        say(" O Sentinela passou a rodar em segundo plano, sem janela.")
+        say(" Esta janela pode ser fechada (ela fecha sozinha em instantes).")
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":

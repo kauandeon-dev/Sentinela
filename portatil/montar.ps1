@@ -42,7 +42,7 @@ Remove-Item -Recurse -Force "$Saida\python\Lib\site-packages\bin" -ErrorAction S
 Write-Host "== Sentinela"
 Copy-Item -Recurse "$repo\sentinela" "$Saida\app\sentinela"
 Copy-Item "$repo\portatil\portatil.py", "$repo\portatil\demo.sql", "$repo\LICENSE", "$repo\README.md" "$Saida\app"
-Copy-Item "$repo\portatil\Sentinela.bat", "$repo\portatil\Sentinela-Demo.bat", "$repo\portatil\Trocar-Senha.bat", "$repo\portatil\Descriptografar.bat", "$repo\portatil\LEIA-ME.txt" $Saida
+Copy-Item "$repo\portatil\Sentinela.bat", "$repo\portatil\Sentinela-Demo.bat", "$repo\portatil\Trocar-Senha.bat", "$repo\portatil\Descriptografar.bat", "$repo\portatil\Parar-Sentinela.bat", "$repo\portatil\LEIA-ME.txt" $Saida
 Get-ChildItem $Saida -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
 
 # 4. PostgreSQL: clientes (pg_dump/psql) e servidor do banco de demonstração

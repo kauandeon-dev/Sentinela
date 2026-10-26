@@ -29,6 +29,7 @@ def env(tmp_path, monkeypatch):
     e._key = None
     # sem esperas entre tentativas de envio aos destinos externos
     monkeypatch.setattr(s, "REPLICA_BACKOFF", [0])
+    monkeypatch.setattr(s, "STARTUP_GRACE", 0)
     return {"home": home, "backups": backups, "engine": e, "storage": st}
 
 

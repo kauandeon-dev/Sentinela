@@ -427,6 +427,11 @@
       alert = `<div class="alert">${I.warn()}<span>${d.failures.count} ${d.failures.count === 1 ? 'backup falhou' : 'backups falharam'} — o mais recente em <strong>${fmtDay(f.created_at)}</strong>: ${esc(shortErr(f.error))}</span><a href="#/backup/${esc(f.id)}">Ver logs →</a></div>`;
     }
 
+    const v = d.servico;
+    if (d.active && v && v.supported && !v.managed && !v.enabled) {
+      alert += `<div class="alert info">${I.clock}<span>Os backups automáticos só acontecem com o Sentinela aberto. Ative o início com o computador para eles continuarem depois de desligar e ligar o PC.</span><a href="#/politica">Ativar →</a></div>`;
+    }
+
     const rows = d.recent.length ? d.recent.map((b) => `
       <div class="row" data-open="${esc(b.id)}">
         <span class="r-date">${fmtWhen(b.created_at)}</span>
@@ -630,6 +635,8 @@
         ${p.schedule_mode === 'custom' ? `<div class="inline">Executar a cada <input class="num" type="number" id="pol-interval" min="${Lm.interval[0]}" max="${Lm.interval[1]}" value="${esc(p.interval_days)}"> dias, à meia-noite</div>` : ''}
       </div>
 
+      ${viewServico()}
+
       <div class="card pad-lg mb16">
         <div class="card-title">Retenção</div>
         <div class="card-sub" style="margin-bottom:18px">Por quantos dias cada cópia é mantida antes de ser excluída automaticamente.</div>
@@ -660,6 +667,47 @@
         <a class="btn btn-ghost btn-lg" href="#/painel">Cancelar</a>
       </div>
     </div>`;
+  }
+
+  // Execução em segundo plano: início automático com o computador
+  function viewServico() {
+    const v = S.data.servico;
+    if (!v) return '';
+    let body;
+    if (v.managed) {
+      body = `<div class="kv"><span>Início automático</span><span><span class="dot g"></span> ${esc(v.managed)}</span></div>`;
+    } else if (!v.supported) {
+      body = '<div class="hint" style="margin-top:0">Neste sistema, use o Docker para o Sentinela iniciar com o computador (veja o README).</div>';
+    } else {
+      const now = S.svcSwitching
+        ? `${I.spinner()} Passando para o segundo plano… o painel volta em instantes.`
+        : v.background ? `<span class="dot g"></span> Rodando em segundo plano${v.since ? ' desde ' + fmtWhen(v.since) : ''}. Pode fechar o navegador: os backups continuam.`
+          : `<span class="dot y"></span> Rodando nesta janela: se ela for fechada, os backups automáticos param${v.enabled ? ' até o próximo início do computador' : ''}.`;
+      body = `
+        <div class="toggle-row"><div><div class="t">Iniciar com o computador</div><div class="d">${esc(v.how)}. Vale na hora, sem precisar salvar.</div></div>
+          <button class="toggle ${v.enabled ? 'on' : ''}" data-action="svc-toggle" aria-label="Iniciar com o computador" ${S.busy.svc || S.svcSwitching ? 'disabled' : ''}><span></span></button></div>
+        <div class="svc-now">${now}</div>
+        ${v.blocked ? '<div class="warn-note">O início automático foi desativado na aba <b>Inicializar</b> do Gerenciador de Tarefas (aparece como "Python"). Reative por lá, ou desligue e ligue a opção acima.</div>' : ''}
+        ${v.other ? `<div class="warn-note">O início automático está registrado para outra pasta do Sentinela: <code>${esc(v.other)}</code>. Ativar aqui substitui.</div>` : ''}
+        ${v.background && !S.svcSwitching ? `<div class="svc-stop"><button class="btn btn-danger-ghost" data-action="svc-stop">${I.trash}Encerrar o Sentinela agora</button></div>` : ''}`;
+    }
+    return `<div class="card pad-lg mb16">
+        <div class="card-title">Execução em segundo plano</div>
+        <div class="card-sub">O Sentinela abre sozinho quando o computador liga, sem janela, e faz os backups no horário. Um backup que ficou para trás com o computador desligado roda assim que ele for ligado.</div>
+        ${body}
+      </div>`;
+  }
+
+  // Espera a instância nova (em segundo plano) assumir o mesmo endereço.
+  async function waitBackground() {
+    for (let i = 0; i < 90; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const r = await fetch('/api/servico', { credentials: 'same-origin' });
+        if (r.ok && (await r.json()).servico.background) return true;
+      } catch (e) { /* a instância anterior saiu e a nova ainda está subindo */ }
+    }
+    return false;
   }
 
   // ============================================================= histórico
@@ -1260,6 +1308,39 @@
     'pol-custom'() { readPolicy(); S.policyDraft.schedule_mode = 'custom'; render(); },
     'pol-enc'() { readPolicy(); S.policyDraft.encryption = !S.policyDraft.encryption; render(); },
     'pol-comp'() { readPolicy(); S.policyDraft.compression = !S.policyDraft.compression; render(); },
+    async 'svc-toggle'() {
+      const enable = !S.data.servico.enabled;
+      S.busy.svc = true; render();
+      try {
+        const r = await api('POST', '/api/servico', { enabled: enable });
+        S.data.servico = r.servico;
+        if (r.handoff) {
+          S.svcSwitching = true; S.busy.svc = false; render();
+          const ok = await waitBackground();
+          S.svcSwitching = false;
+          await load();
+          toast(ok ? 'Pronto: o Sentinela roda em segundo plano. Pode fechar a janela preta.'
+            : 'O segundo plano não respondeu. Veja logs/segundo-plano.log na pasta de dados.', !ok);
+        } else {
+          toast(enable ? 'Início automático ativado' : 'Início automático desativado');
+        }
+      } catch (e) { toast(e.message, true); }
+      S.busy.svc = false; render();
+    },
+    'svc-stop'() {
+      confirmModal({
+        title: 'Encerrar o Sentinela?',
+        html: 'O painel sai do ar e <strong>os backups automáticos param</strong> até o Sentinela ser aberto de novo (ou o computador reiniciar, se o início automático estiver ativo). Uma execução em andamento termina antes.',
+        okLabel: 'Encerrar',
+        async onOk() {
+          try {
+            const r = await api('POST', '/api/servico/encerrar', {});
+            clearTimeout(pollTimer); S.user = null;
+            app.innerHTML = `<div class="bye"><h2>Sentinela encerrado</h2><p>${r.waiting ? 'Ele sai assim que a execução em andamento terminar. ' : ''}Para abrir de novo: <b>Sentinela.bat</b> (versão portátil) ou <span class="mono">python -m sentinela serve</span>.</p></div>`;
+          } catch (e) { toast(e.message, true); }
+        },
+      });
+    },
     async 'pol-save'() {
       readPolicy(); S.busy.pol = true; render();
       try {

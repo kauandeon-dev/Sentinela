@@ -2,3 +2,6 @@
 *.sh text eol=lf
 *.ps1 text eol=crlf
 portatil/*.txt text eol=crlf
+*.iss text eol=crlf
+*.cs text eol=crlf
+*.ico binary

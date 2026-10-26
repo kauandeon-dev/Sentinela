@@ -109,7 +109,7 @@ def release_instance():
 
 def running_instance():
     """Instância rodando nesta pasta de dados: dict (url, pid, background...)
-    ou None. Funciona também de outro processo (CLI, .bat)."""
+    ou None. Funciona também de outro processo (CLI, atalhos)."""
     if _instance_fd is not None:
         return dict(_info)
     if not _lock_path().exists():
@@ -176,6 +176,33 @@ def request_stop():
         return False
     _stop_path().write_text(str(time.time()), encoding="ascii")
     return True
+
+
+def wait_exit(pid, timeout=30):
+    """Espera o processo ``pid`` terminar (ex.: antes de apagar os arquivos do
+    programa no desinstalador). True se terminou."""
+    if not pid:
+        return True
+    if compat.IS_WINDOWS:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
+        if not h:
+            return True  # já terminou
+        try:
+            return k32.WaitForSingleObject(h, int(timeout * 1000)) == 0
+        finally:
+            k32.CloseHandle(h)
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        time.sleep(0.2)
+    return False
 
 
 def stop_self():

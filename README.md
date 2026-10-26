@@ -269,7 +269,7 @@ Escolha um dos jeitos:
 
 | Jeito | Para quem | Precisa instalar |
 |---|---|---|
-| [**Portátil (Windows)**](#50-versão-portátil-para-windows--sem-instalar-nada) | Computador fraco, de laboratório/escola, sem Docker e sem ser administrador; apresentações | **Nada** — baixar o ZIP e dar dois cliques |
+| [**Instalador ou portátil (Windows)**](#50-windows-instalador-ou-versão-portátil--tudo-incluído) | Computador fraco, de laboratório/escola, sem Docker e sem ser administrador; apresentações | **Nada** — `Sentinela-Instalador.exe` (tudo incluído) ou o ZIP portátil |
 | [**Docker**](#51-docker--qualquer-sistema-o-mais-fácil) | Qualquer sistema; o mais simples de manter | Só o Docker (Docker Desktop no Windows/macOS) |
 | [**Windows**](#52-windows-sem-docker) | Servidor ou PC Windows 10/11 / Server 2019+ | Python e o PostgreSQL ou MariaDB (os clientes vêm junto) |
 | [**Linux**](#53-linux) | Servidor Linux | Python e os pacotes cliente do banco |
@@ -277,28 +277,49 @@ Escolha um dos jeitos:
 Os três são testados automaticamente a cada alteração (GitHub Actions: Ubuntu, Windows com Python
 3.12 e 3.13, e a imagem Docker) — veja a [seção 16](#16-testes).
 
-### 5.0 Versão portátil para Windows — sem instalar nada
+### 5.0 Windows: instalador ou versão portátil — tudo incluído
 
 Para computadores fracos ou de laboratório, onde o Docker não roda (ele exige virtualização e
-pelo menos 4 GB de RAM) e não dá para instalar programas. A pasta portátil traz **tudo junto**:
-Python oficial embutido, o Sentinela, o `pg_dump`/`psql` do PostgreSQL 17, o
-`mariadb-dump`/`mariadb` e o runtime do Visual C++. Não precisa de administrador, não mexe no
-sistema e roda até de pendrive. Usa por volta de 100 MB de RAM.
+pelo menos 4 GB de RAM). Os dois trazem **tudo junto**: Python oficial embutido, o Sentinela, o
+`pg_dump`/`psql` do PostgreSQL 17, o `mariadb-dump`/`mariadb` e o runtime do Visual C++. Não
+precisam de administrador nem de Python/PostgreSQL instalados. Usam por volta de 100 MB de RAM.
+Requer Windows 10 ou 11, 64 bits.
 
-**Baixar:** página [Releases](https://github.com/kauandeon-dev/Sentinela/releases) →
-**Sentinela-Portatil-Windows.zip** (≈ 73 MB). Requer Windows 10 ou 11, 64 bits.
+**Baixar:** página [Releases](https://github.com/kauandeon-dev/Sentinela/releases):
+
+| Arquivo | Para quê |
+|---|---|
+| **`Sentinela-Instalador.exe`** (recomendado) | Dois cliques e *Avançar*: instala em `%LOCALAPPDATA%\Programs\Sentinela` (só para o seu usuário, **sem administrador**), cria os atalhos no **Menu Iniciar** e na **Área de Trabalho** e aparece em *Aplicativos instalados* para desinstalar |
+| **`Sentinela-Portatil-Windows.zip`** | Sem instalar: extraia e use — roda até de pendrive |
+
+O instalador não é assinado digitalmente (certificado pago): se aparecer *"O Windows protegeu o
+computador"*, clique em **Mais informações → Executar assim mesmo**.
+
+**Instalador:**
+
+- **Atualizar:** rode o instalador da versão nova por cima. Se o Sentinela estiver aberto ou em
+  segundo plano, ele é encerrado antes (um backup em andamento termina primeiro) e, se o início
+  automático estava ativo, volta sozinho em segundo plano.
+- **Desinstalar** (Configurações → Aplicativos, ou o atalho *Desinstalar o Sentinela*): encerra o
+  Sentinela, remove o início automático e o banco de demonstração. **As pastas `dados\` (chave
+  mestra e configurações) e `backups\` (as cópias) são mantidas** — apague-as à mão se não
+  precisar mais delas.
+
+**Versão portátil:**
 
 1. Botão direito no ZIP → *Propriedades* → marque **Desbloquear** → OK (evita o aviso do Windows).
 2. Botão direito → *Extrair Tudo…* → Área de Trabalho. **Não rode de dentro do ZIP.**
-3. Dois cliques em um atalho:
+
+Nos dois, os atalhos são **`.exe` com o ícone do Sentinela** (no instalador, também no Menu
+Iniciar). Dois cliques em um deles:
 
 | Atalho | O que faz |
 |---|---|
-| **`Sentinela-Demo.bat`** | **Para apresentar:** sobe junto um PostgreSQL portátil com uma loja de exemplo (500 clientes, 200 produtos, 20 mil pedidos, uma view e uma função) e já deixa o Sentinela conectado nele |
-| **`Sentinela.bat`** | Uso normal: configure a conexão com o seu banco na tela Conexão |
-| **`Trocar-Senha.bat`** | Troca a senha do `admin` |
-| **`Descriptografar.bat`** | **Arraste** uma ou mais cópias (`.sql.gz.enc`) para cima dele: o `.sql` sem criptografia sai ao lado de cada uma. Com dois cliques (sem arrastar), recupera a cópia mais recente de cada banco |
-| **`Parar-Sentinela.bat`** | Encerra o Sentinela que está rodando em segundo plano (ou use o botão no painel) |
+| **`Sentinela-Demo.exe`** | **Para apresentar:** sobe junto um PostgreSQL portátil com uma loja de exemplo (500 clientes, 200 produtos, 20 mil pedidos, uma view e uma função) e já deixa o Sentinela conectado nele |
+| **`Sentinela.exe`** | Uso normal: configure a conexão com o seu banco na tela Conexão |
+| **`Trocar-Senha.exe`** | Troca a senha do `admin` |
+| **`Descriptografar.exe`** | **Arraste** uma ou mais cópias (`.sql.gz.enc`) para cima dele: o `.sql` sem criptografia sai ao lado de cada uma. Com dois cliques (sem arrastar), recupera a cópia mais recente de cada banco |
+| **`Parar-Sentinela.exe`** | Encerra o Sentinela que está rodando em segundo plano (ou use o botão no painel) |
 
 4. O navegador abre sozinho. Usuário `admin`; a senha aparece na janela preta na primeira vez.
 5. Configure a conexão e a política. Depois, em **Política de backup → Execução em segundo
@@ -307,8 +328,8 @@ sistema e roda até de pendrive. Usa por volta de 100 MB de RAM.
    de administrador). O banco de demonstração, se for o banco configurado, sobe junto.
    Sem isso, deixe a janela aberta enquanto usa; para encerrar, feche-a (o banco de demonstração é
    desligado junto).
-6. Com o Sentinela em segundo plano, os atalhos `Sentinela.bat`/`Sentinela-Demo.bat` só abrem o
-   painel no navegador.
+6. Com o início automático ativo, `Sentinela.exe`/`Sentinela-Demo.exe` só abrem o painel no
+   navegador — e, se o Sentinela tiver sido encerrado, sobem ele de novo em segundo plano.
 
 Detalhes:
 
@@ -323,14 +344,23 @@ Detalhes:
 
 O pacote é montado pelo [`portatil/montar.ps1`](portatil/montar.ps1) e, a cada alteração, o
 GitHub Actions o **testa num Windows sem PostgreSQL e sem Python instalados**, numa pasta com
-espaço e acento e simulando um aluno com acento no nome de usuário: abre o `Sentinela-Demo.bat`,
+espaço e acento e simulando um aluno com acento no nome de usuário: abre o `Sentinela-Demo.exe`,
 faz backup, cópia externa, verificação e restauração pelo painel, confere que o PostgreSQL é
-desligado ao encerrar, que o `Descriptografar.bat` devolve o SQL completo e que a segunda abertura
+desligado ao encerrar, que o `Descriptografar.exe` devolve o SQL completo e que a segunda abertura
 reaproveita tudo. Depois liga **Iniciar com o computador** pelo painel e confere o registro na
 chave *Executar* do usuário, a janela fechando e o painel voltando no mesmo endereço como
-`pythonw.exe` (sem janela), o `Parar-Sentinela.bat`, e simula **desligar e ligar o PC depois da
-meia-noite**: executa o comando registrado e espera o backup atrasado ser feito sozinho — e só
-então publica o ZIP.
+`pythonw.exe` (sem janela), o `Parar-Sentinela.exe`, e simula **desligar e ligar o PC depois da
+meia-noite**: executa o comando registrado e espera o backup atrasado ser feito sozinho. O
+**instalador** é validado noutro Windows limpo: instala sem administrador, confere arquivos,
+atalhos e *Aplicativos instalados*, roda o mesmo roteiro na pasta instalada, ativa o início
+automático, **atualiza por cima com o Sentinela rodando** (ele volta sozinho em segundo plano) e
+desinstala (processos encerrados, início automático e atalhos removidos, `dados\` e `backups\`
+mantidos) — e só então os dois são publicados.
+
+Os atalhos `.exe` são um lançador pequeno ([`portatil/lancador`](portatil/lancador/Sentinela.cs),
+C# compilado com o `csc.exe` que já vem no Windows): o nome do arquivo escolhe a função, ele chama
+o Python embutido na mesma janela e a mantém aberta para ler as mensagens. O instalador é gerado
+com o Inno Setup ([`portatil/instalador.iss`](portatil/instalador.iss)).
 
 ### 5.1 Docker — qualquer sistema (o mais fácil)
 
@@ -516,9 +546,9 @@ Iniciar com o computador** (ou `python -m sentinela servico ativar`). A partir d
   (depois de 60 s, para a rede e o banco subirem). Se falhar, tenta de novo a cada 10 min (3×).
 - Se ele estava aberto numa janela, **passa na hora para o segundo plano**: a janela fecha e o
   painel volta sozinho em poucos segundos — sem esperar reiniciar.
-- **Uma instância por pasta de dados:** abrir de novo (`Sentinela.bat`, `serve`) só mostra o
+- **Uma instância por pasta de dados:** abrir de novo (`Sentinela.exe`, `serve`) só mostra o
   endereço da que já está rodando.
-- **Encerrar:** botão *Encerrar o Sentinela agora* no mesmo cartão, `Parar-Sentinela.bat` (versão
+- **Encerrar:** botão *Encerrar o Sentinela agora* no mesmo cartão, `Parar-Sentinela.exe` (versão
   portátil) ou `python -m sentinela servico parar`. Um backup em andamento termina antes.
 
 | Sistema | Como inicia | Administrador? |
@@ -603,7 +633,7 @@ Clique numa linha para abrir o **detalhe**:
   o `.sql` pronto para abrir ou importar (`psql -f`, `mariadb <`, DBeaver…). O download é por um
   link de uso único, válido por 2 minutos, e fica registrado no log. Fora do painel:
   [`python -m sentinela decrypt`](#11-linha-de-comando) ou, na versão portátil, o
-  `Descriptografar.bat`.
+  `Descriptografar.exe`.
 - **Trazer para o servidor:** aparece quando a cópia não está mais no disco local, mas existe num
   destino externo.
 - **Excluir cópia:** apaga o arquivo do diretório **e as cópias externas** dela.
@@ -1013,6 +1043,8 @@ seção 4.3) **e a chave**.
 | Backups pararam depois de reiniciar o computador | Início automático desligado ou desativado no Gerenciador de Tarefas | Painel → *Saúde da proteção* mostra a causa; ligue em **Política de backup → Iniciar com o computador** |
 | `O Sentinela já está rodando com esta pasta de dados: …` | Outra instância (janela ou segundo plano) já usa os mesmos dados | Use o endereço mostrado, ou encerre: `python -m sentinela servico parar` |
 | `Não foi possível usar o systemd do usuário` (Linux) | Sessão sem systemd do usuário (SSH, contêiner) | Use o serviço do sistema (`deploy/sentinela.service`) |
+| "O Windows protegeu o computador" ao abrir o instalador ou um `.exe` | Arquivo baixado da internet e sem assinatura digital | *Mais informações → Executar assim mesmo* (no ZIP: *Propriedades → Desbloquear* antes de extrair) |
+| `Pasta incompleta: falta "python\python.exe"` | `.exe` aberto de dentro do ZIP ou copiado sozinho | Extraia o ZIP inteiro (ou use o instalador) |
 | Docker: o painel não abre / `iniciar.bat` diz que o Docker não está aberto | Docker Desktop fechado | Abra o Docker Desktop e espere ficar *running* |
 | Docker: não conecta no banco em `localhost` | Dentro do contêiner `localhost` é o próprio contêiner | Use `host.docker.internal` (e libere o banco para a rede do Docker) |
 | Erros de destino externo | ver [seção 9.3](#93-mensagens-de-erro-dos-destinos) | |
@@ -1039,7 +1071,7 @@ O workflow [`.github/workflows/testes.yml`](.github/workflows/testes.yml) roda s
 | **Windows** · Python 3.12 e 3.13 | Suíte completa com PostgreSQL 17 e MariaDB reais, **sem** os clientes no PATH (prova a busca automática em `C:\Program Files`), e um teste de fumaça com o painel rodando de verdade: login, conexão, backup, cópia externa, verificação e restauração |
 | **Ubuntu** · Python 3.12 | Suíte completa com PostgreSQL + o mesmo teste de fumaça |
 | **Docker** | Constrói a imagem, sobe ao lado de um PostgreSQL 17 com pastas montadas pertencentes ao root (pior caso) e roda o teste de fumaça dentro do contêiner |
-| **Versão portátil** ([`portatil.yml`](.github/workflows/portatil.yml)) | Monta o ZIP no Windows, extrai num Windows **sem PostgreSQL e sem Python**, em `C:\Teste Portátil`, com o perfil do usuário em `C:\Usuários\João`, e valida o `Sentinela-Demo.bat` de ponta a ponta — inclusive o **início automático** (chave *Executar*, `pythonw.exe` sem janela, desligar e ligar o PC com o backup da meia-noite perdido); se passar, publica em Releases |
+| **Versão portátil** ([`portatil.yml`](.github/workflows/portatil.yml)) | Monta o ZIP no Windows, extrai num Windows **sem PostgreSQL e sem Python**, em `C:\Teste Portátil`, com o perfil do usuário em `C:\Usuários\João`, e valida o `Sentinela-Demo.exe` de ponta a ponta — inclusive o **início automático** (chave *Executar*, `pythonw.exe` sem janela, desligar e ligar o PC com o backup da meia-noite perdido). Gera o **instalador** e o valida noutro Windows limpo: instalar sem administrador, usar, atualizar por cima com o Sentinela rodando e desinstalar. Se tudo passar, publica os dois em Releases |
 
 Os testes de SSH/SFTP usam o servidor simulado abaixo (namespace de rede Linux) e rodam no
 ambiente de desenvolvimento; no Windows eles são ignorados.
@@ -1165,7 +1197,8 @@ tests/             unitários e integração (bancos e SSH reais) + tests/remote
 deploy/            serviço systemd (Linux) e tarefa agendada (deploy/windows)
 Dockerfile, docker-compose.yml, docker/   imagem Docker
 iniciar.bat/.sh, parar.bat, trocar-senha.*  atalhos de um clique para o Docker
-portatil/          versão portátil para Windows (inicializador, atalhos, banco de demonstração, montagem)
+portatil/          versão portátil e instalador para Windows (inicializador, lançador .exe, instalador
+                   Inno Setup, ícone, banco de demonstração, montagem)
 .github/workflows/ testes automáticos (Windows, Ubuntu e Docker)
 docs/img/          capturas de tela
 ```

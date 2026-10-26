@@ -1,5 +1,5 @@
 """Valida a versão portátil já extraída, como um usuário faria no Windows:
-dois cliques em Sentinela-Demo.bat, painel no ar, backup/restauração pelo painel.
+dois cliques em Sentinela-Demo.exe, painel no ar, backup/restauração pelo painel.
 
 Uso: python tests/ci/validar_portatil.py "C:\\Pasta Com Espaço\\Sentinela"
 """
@@ -38,19 +38,31 @@ for exe in ("ferramentas/pgsql/bin/pg_dump.exe", "ferramentas/pgsql/bin/psql.exe
     r = subprocess.run([str(p), "--version"], capture_output=True, text=True)
     check(r.returncode == 0, f"{exe} --version: {r.stdout.strip() or r.stderr.strip()}")
 
+# Atalhos .exe (o mesmo lançador com nomes diferentes)
+for exe in ("Sentinela", "Sentinela-Demo", "Parar-Sentinela", "Trocar-Senha", "Descriptografar"):
+    check((root / f"{exe}.exe").exists(), f"{exe}.exe na pasta")
+check(not list(root.glob("*.bat")), "sem os antigos atalhos .bat")
+import shutil  # noqa: E402
+sozinho = root.parent / "lancador-sozinho"
+sozinho.mkdir(exist_ok=True)
+shutil.copy(root / "Sentinela.exe", sozinho / "Sentinela.exe")
+r = subprocess.run([str(sozinho / "Sentinela.exe")], capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+check(r.returncode == 1 and "Pasta incompleta" in r.stdout.decode("utf-8", "replace"),
+      "Sentinela.exe fora da pasta (ZIP não extraído) explica o que fazer")
+
 py = root / "python" / "python.exe"
 r = subprocess.run([str(py), "-c", "import sys, sentinela, cryptography, paramiko, boto3, waitress;"
                     "print(sys.version.split()[0], sys.executable)"], capture_output=True, text=True)
 check(r.returncode == 0, f"Python embutido com as bibliotecas: {r.stdout.strip() or r.stderr.strip()}")
 
-# "Dois cliques" em Sentinela-Demo.bat (saída da janela vai para um arquivo).
+# "Dois cliques" em Sentinela-Demo.exe (saída da janela vai para um arquivo).
 # Simula também um aluno com acento no nome de usuário (C:\Users\João...): a
 # pasta do usuário não pode ser usada pelo PostgreSQL.
 fake_profile = Path("C:/Usuários/João/AppData/Local")
 fake_profile.mkdir(parents=True, exist_ok=True)
 env = dict(os.environ, SENTINELA_NO_BROWSER="1", LOCALAPPDATA=str(fake_profile))
 out = open(log, "w", encoding="utf-8")
-proc = subprocess.Popen(["cmd", "/c", str(root / "Sentinela-Demo.bat")], cwd=str(root), env=env,
+proc = subprocess.Popen([str(root / "Sentinela-Demo.exe")], cwd=str(root), env=env,
                         stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 text = ""
@@ -59,14 +71,15 @@ for _ in range(240):
     if "ouvindo em" in text or proc.poll() is not None:
         break
     time.sleep(1)
-check("ouvindo em" in text, "painel iniciado pelo Sentinela-Demo.bat")
+check("ouvindo em" in text, "painel iniciado pelo Sentinela-Demo.exe")
 pw = re.search(r"senha: (\S+)", text).group(1)
 url = re.search(r"Painel: (http://\S+?)/?\s", text).group(1)
 check("Banco de demonstração pronto" in text, "banco de demonstração criado e carregado")
 check(str(root / "dados") in text, "dados gravados dentro da pasta portátil")
 demo = Path(re.search(r"arquivos do banco: (.+)", text).group(1).strip())
 check(str(demo).isascii(), f"banco da demonstração numa pasta sem acento: {demo}")
-check("copiando o PostgreSQL" in text, "PostgreSQL copiado para pasta sem acento (pasta portátil tem acento)")
+if not str(root).isascii():
+    check("copiando o PostgreSQL" in text, "PostgreSQL copiado para pasta sem acento (pasta portátil tem acento)")
 
 r = subprocess.run([sys.executable, str(here / "smoke.py"), url, "admin", pw, "127.0.0.1",
                     str(root.parent / "disco-externo"), "5433", "loja_demo", "backup_user", "demo123"])
@@ -77,24 +90,24 @@ check(len(backups) >= 2, f"cópias em {root / 'backups'}: {len(backups)}")
 key = (root / "dados" / "sentinela.key").read_bytes()
 check(len(key) == 32, "chave mestra íntegra (32 bytes, gravada em modo binário)")
 
-# Descriptografar.bat: arrastar uma cópia para cima do atalho (o Explorer chama
-# assim: cmd /c ""atalho.bat" "arquivo"") e sem arquivos (a mais recente)
+# Descriptografar.exe: arrastar uma cópia para cima do atalho (o Explorer passa
+# o caminho como argumento) e sem arquivos (a mais recente)
 enc = sorted(backups)[0]
 sql = enc.with_name(enc.name.replace(".sql.gz.enc", ".sql"))
-r = subprocess.run(f'cmd /c ""{root / "Descriptografar.bat"}" "{enc}""', cwd=str(enc.parent),
+r = subprocess.run([str(root / "Descriptografar.exe"), str(enc)], cwd=str(enc.parent),
                    capture_output=True, stdin=subprocess.DEVNULL)
 saida = r.stdout.decode("utf-8", "replace")
-check(sql.exists() and "OK" in saida, f"Descriptografar.bat com arquivo arrastado gera {sql.name}: "
+check(sql.exists() and "OK" in saida, f"Descriptografar.exe com arquivo arrastado gera {sql.name}: "
       + saida.strip().replace("\r\n", " | "))
 texto = sql.read_text(encoding="utf-8")
 check("PostgreSQL database dump complete" in texto and "São Lourenço do Oeste" in texto,
       "SQL descriptografado completo e com acentos")
 sql.unlink()
-r = subprocess.run(["cmd", "/c", str(root / "Descriptografar.bat")], capture_output=True,
+r = subprocess.run([str(root / "Descriptografar.exe")], capture_output=True,
                    stdin=subprocess.DEVNULL)
 novos = list((root / "backups").glob("*.sql"))
 check(len(novos) == 1 and "mais recente" in r.stdout.decode("utf-8", "replace"),
-      f"Descriptografar.bat sem arquivos recupera a cópia mais recente: {[n.name for n in novos]}")
+      f"Descriptografar.exe sem arquivos recupera a cópia mais recente: {[n.name for n in novos]}")
 for n in novos:
     n.unlink()
 
@@ -145,7 +158,7 @@ subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=T
 
 # Segunda abertura: reaproveita o banco e a configuração (sem recriar nada)
 out = open(log, "w", encoding="utf-8")
-proc = subprocess.Popen(["cmd", "/c", str(root / "Sentinela-Demo.bat")], cwd=str(root), env=env,
+proc = subprocess.Popen([str(root / "Sentinela-Demo.exe")], cwd=str(root), env=env,
                         stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 for _ in range(120):
@@ -232,17 +245,17 @@ check(bool(st) and st["background"] and st["url"].rstrip("/") == url,
 check(pythonw_running(), "processo sem janela (pythonw.exe)")
 check(wait(pg_running, 60), "banco de demonstração ligado pelo segundo plano")
 
-r = subprocess.run(["cmd", "/c", str(root / "Sentinela.bat")], capture_output=True, env=env,
+r = subprocess.run([str(root / "Sentinela.exe")], capture_output=True, env=env,
                    stdin=subprocess.DEVNULL, timeout=120)
 saida = r.stdout.decode("utf-8", "replace")
 check("já está rodando em segundo plano" in saida and url in saida,
-      "Sentinela.bat com o segundo plano rodando só abre o painel: " + saida.strip().replace("\r\n", " | "))
+      "Sentinela.exe com o segundo plano rodando só abre o painel: " + saida.strip().replace("\r\n", " | "))
 
 # "Desligar o computador"
-r = subprocess.run(["cmd", "/c", str(root / "Parar-Sentinela.bat")], capture_output=True, env=env,
+r = subprocess.run([str(root / "Parar-Sentinela.exe")], capture_output=True, env=env,
                    stdin=subprocess.DEVNULL, timeout=600)
 saida = r.stdout.decode("utf-8", "replace")
-check("Sentinela encerrado" in saida and not up(), "Parar-Sentinela.bat encerra o segundo plano: "
+check("Sentinela encerrado" in saida and not up(), "Parar-Sentinela.exe encerra o segundo plano: "
       + saida.strip().replace("\r\n", " | "))
 check(wait(lambda: not pg_running(), 30), "banco de demonstração desligado junto")
 

@@ -1,9 +1,12 @@
-# Monta a versão portátil do Sentinela para Windows (pasta + ZIP).
+﻿# Monta a versão portátil do Sentinela para Windows (pasta + ZIP).
 #
 # Requisitos na máquina que MONTA (não na que vai usar): Windows 64 bits,
 # Python 3.12 no PATH, PostgreSQL instalado (os binários são copiados dele) e,
 # opcionalmente, MariaDB (clientes mariadb/mariadb-dump). É o que o GitHub
 # Actions usa em .github/workflows/portatil.yml.
+#
+# Gera, ao lado da pasta: Sentinela-Portatil-Windows.zip e, se o Inno Setup 6
+# estiver instalado (choco install innosetup), Sentinela-Instalador.exe.
 #
 # Uso:  powershell -ExecutionPolicy Bypass -File portatil\montar.ps1 [-Saida dist\Sentinela]
 param(
@@ -42,7 +45,7 @@ Remove-Item -Recurse -Force "$Saida\python\Lib\site-packages\bin" -ErrorAction S
 Write-Host "== Sentinela"
 Copy-Item -Recurse "$repo\sentinela" "$Saida\app\sentinela"
 Copy-Item "$repo\portatil\portatil.py", "$repo\portatil\demo.sql", "$repo\LICENSE", "$repo\README.md" "$Saida\app"
-Copy-Item "$repo\portatil\Sentinela.bat", "$repo\portatil\Sentinela-Demo.bat", "$repo\portatil\Trocar-Senha.bat", "$repo\portatil\Descriptografar.bat", "$repo\portatil\Parar-Sentinela.bat", "$repo\portatil\LEIA-ME.txt" $Saida
+Copy-Item "$repo\portatil\LEIA-ME.txt" $Saida
 Get-ChildItem $Saida -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
 
 # 4. PostgreSQL: clientes (pg_dump/psql) e servidor do banco de demonstração
@@ -97,7 +100,17 @@ foreach ($dir in @("$pg\bin", "$Saida\ferramentas\mariadb")) {
     }
 }
 
-# 7. ZIP
+# 7. Atalhos .exe: o mesmo lançador (portatil\lancador) com nomes diferentes,
+#    compilado pelo csc.exe que acompanha o Windows (.NET Framework 4)
+Write-Host "== Lançador"
+$csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+& $csc /nologo /target:exe /optimize+ /codepage:65001 "/win32icon:$repo\portatil\sentinela.ico" `
+    "/out:$Saida\Sentinela.exe" "$repo\portatil\lancador\Sentinela.cs"
+if ($LASTEXITCODE -ne 0) { throw "Falha ao compilar o lançador" }
+foreach ($n in "Sentinela-Demo", "Parar-Sentinela", "Trocar-Senha", "Descriptografar") {
+    Copy-Item "$Saida\Sentinela.exe" "$Saida\$n.exe" }
+
+# 8. ZIP
 Write-Host "== Compactando"
 $destZip = Join-Path (Split-Path $Saida) "Sentinela-Portatil-Windows.zip"
 if (Test-Path $destZip) { Remove-Item $destZip }
@@ -107,3 +120,15 @@ Pop-Location
 $mb = [math]::Round((Get-Item $destZip).Length / 1MB, 1)
 $total = [math]::Round(((Get-ChildItem $Saida -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
 Write-Host "Pronto: $destZip ($mb MB; $total MB extraído)"
+
+# 9. Instalador (Inno Setup 6): instala para o usuário, sem administrador
+$iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+        Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($iscc) {
+    Write-Host "== Instalador"
+    $versao = (python -c "import sys; sys.path.insert(0, r'$repo'); import sentinela; print(sentinela.__version__)").Trim()
+    & $iscc /Q "/DPasta=$Saida" "/DVersao=$versao" "/DDestino=$(Split-Path $Saida)" "$repo\portatil\instalador.iss"
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao gerar o instalador" }
+    $exe = Join-Path (Split-Path $Saida) "Sentinela-Instalador.exe"
+    Write-Host "Pronto: $exe ($([math]::Round((Get-Item $exe).Length / 1MB, 1)) MB)"
+} else { Write-Host "== Inno Setup 6 não encontrado: instalador não gerado (choco install innosetup)" }

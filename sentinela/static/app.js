@@ -1336,7 +1336,7 @@
           try {
             const r = await api('POST', '/api/servico/encerrar', {});
             clearTimeout(pollTimer); S.user = null;
-            app.innerHTML = `<div class="bye"><h2>Sentinela encerrado</h2><p>${r.waiting ? 'Ele sai assim que a execução em andamento terminar. ' : ''}Para abrir de novo: <b>Sentinela.bat</b> (versão portátil) ou <span class="mono">python -m sentinela serve</span>.</p></div>`;
+            app.innerHTML = `<div class="bye"><h2>Sentinela encerrado</h2><p>${r.waiting ? 'Ele sai assim que a execução em andamento terminar. ' : ''}Para abrir de novo: <b>Sentinela.exe</b> (versão portátil ou instalada) ou <span class="mono">python -m sentinela serve</span>.</p></div>`;
           } catch (e) { toast(e.message, true); }
         },
       });

@@ -1,8 +1,9 @@
 name: Versão portátil (Windows)
 
-# Monta o Sentinela portátil (Python embutido + PostgreSQL/MariaDB portáteis),
-# valida num Windows "limpo" (sem PostgreSQL instalado, pasta com espaço e
-# acento) e publica o ZIP na página de Releases do repositório.
+# Monta o Sentinela portátil (Python embutido + PostgreSQL/MariaDB portáteis)
+# e o instalador (Inno Setup), valida os dois num Windows "limpo" (sem
+# PostgreSQL instalado; pasta com espaço e acento; instalar, atualizar com o
+# Sentinela rodando e desinstalar) e publica na página de Releases.
 on:
   push:
     branches: [main, teste-windows]
@@ -17,9 +18,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Clientes do MariaDB (para copiar mariadb e mariadb-dump)
+      - name: Clientes do MariaDB (para copiar mariadb e mariadb-dump) e Inno Setup
         shell: pwsh
-        run: choco install mariadb -y --no-progress | Out-Null
+        run: |
+          choco install mariadb -y --no-progress | Out-Null
+          choco install innosetup -y --no-progress | Out-Null
       - name: Montar a pasta portátil
         shell: pwsh
         run: ./portatil/montar.ps1 -Saida "$env:RUNNER_TEMP\pacote\Sentinela"
@@ -27,6 +30,11 @@ jobs:
         with:
           name: Sentinela-Portatil-Windows
           path: ${{ runner.temp }}/pacote/Sentinela-Portatil-Windows.zip
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sentinela-Instalador
+          path: ${{ runner.temp }}/pacote/Sentinela-Instalador.exe
           compression-level: 0
 
   validar:
@@ -78,7 +86,7 @@ jobs:
             "CREATE PROCEDURE IF NOT EXISTS loja_mysql.total_clientes() SELECT COUNT(*) FROM loja_mysql.clientes;"
           ) | Set-Content -Encoding utf8NoBOM C:\mysql-init.sql
           "$mysqld" | Set-Content C:\mysqld-caminho.txt
-      - name: Validar como um usuário (dois cliques no Sentinela-Demo.bat)
+      - name: Validar como um usuário (dois cliques no Sentinela-Demo.exe)
         shell: pwsh
         env:
           PYTHONUTF8: "1"
@@ -99,8 +107,31 @@ jobs:
           if (-not (Test-NetConnection 127.0.0.1 -Port 3307 -WarningAction SilentlyContinue).TcpTestSucceeded) { throw "MySQL de teste não está no ar" }
           python tests/ci/validar_portatil.py "C:\Teste Portátil\Sentinela"
 
+  validar-instalador:
+    needs: construir
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6   # só para rodar o roteiro de validação
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sentinela-Instalador
+      - name: Simular PC sem PostgreSQL instalado
+        shell: pwsh
+        run: |
+          Get-Service -Name "postgresql*" | Stop-Service -ErrorAction SilentlyContinue
+          Rename-Item "C:\Program Files\PostgreSQL" "PostgreSQL-removido"
+      - name: Instalar, usar, atualizar com o Sentinela rodando e desinstalar
+        shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+        run: python tests/ci/validar_instalador.py "$PWD\Sentinela-Instalador.exe"
+
   publicar:
-    needs: validar
+    needs: [validar, validar-instalador]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
@@ -109,6 +140,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: Sentinela-Portatil-Windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sentinela-Instalador
       - name: Publicar em Releases
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,13 +151,15 @@ jobs:
           TAG="portatil-${GITHUB_REF_NAME}"
           gh release delete "$TAG" --cleanup-tag -y 2>/dev/null || true
           PRE=""; [ "$GITHUB_REF_NAME" != "main" ] && PRE="--prerelease"
-          gh release create "$TAG" Sentinela-Portatil-Windows.zip --target "$GITHUB_SHA" $PRE \
-            --title "Sentinela portátil para Windows ($GITHUB_REF_NAME)" \
-            --notes "Versão portátil: não precisa instalar nada, nem Docker, nem ser administrador.
+          gh release create "$TAG" Sentinela-Instalador.exe Sentinela-Portatil-Windows.zip --target "$GITHUB_SHA" $PRE \
+            --title "Sentinela para Windows ($GITHUB_REF_NAME)" \
+            --notes "Tudo incluído (Python, PostgreSQL e MariaDB portáteis). Não precisa de Docker nem de administrador.
 
-          1. Baixe **Sentinela-Portatil-Windows.zip**, clique com o botão direito > Propriedades > Desbloquear.
-          2. Extraia (botão direito > Extrair Tudo) na Área de Trabalho.
-          3. Dois cliques em **Sentinela-Demo.bat** (apresentação, com banco de exemplo) ou **Sentinela.bat**.
+          **Instalador (recomendado):** baixe **Sentinela-Instalador.exe** e dê dois cliques. Se aparecer \"O Windows protegeu o computador\", clique em *Mais informações* > *Executar assim mesmo* (o instalador não é assinado). Os atalhos ficam no Menu Iniciar e na Área de Trabalho.
+
+          **Portátil (sem instalar, roda até de pendrive):** baixe **Sentinela-Portatil-Windows.zip**, botão direito > Propriedades > Desbloquear, extraia e dê dois cliques em **Sentinela-Demo.exe** (apresentação) ou **Sentinela.exe**.
+
+          Depois de configurar, ligue *Política de backup > Iniciar com o computador*: o Sentinela passa a rodar sozinho, sem janela, a cada vez que o Windows inicia.
 
           Requer Windows 10/11 64 bits. Validado automaticamente num Windows sem PostgreSQL nem Python instalados.
           Commit: ${GITHUB_SHA}"

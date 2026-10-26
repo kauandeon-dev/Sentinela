@@ -140,7 +140,10 @@ if mysql_port:
 # Encerrar com Ctrl+Break (como Ctrl+C na janela) deve desligar também o
 # PostgreSQL da demonstração
 import signal  # noqa: E402
-pg_ctl = demo.parent / "pgsql" / "bin" / "pg_ctl.exe"
+# O PostgreSQL só é copiado para a pasta da demonstração quando a pasta do
+# Sentinela tem acento; senão roda direto de ferramentas\pgsql
+pg_ctl = next(p for p in (demo.parent / "pgsql" / "bin" / "pg_ctl.exe",
+                          root / "ferramentas" / "pgsql" / "bin" / "pg_ctl.exe") if p.exists())
 
 
 def pg_running():

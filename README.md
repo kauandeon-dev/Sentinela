@@ -37,10 +37,11 @@ Autor: **Kauan V. Machado Deon** · Licença MIT
 ## 1. Por que o Sentinela existe
 
 Muitas pequenas empresas já usam sistemas informatizados, mas não têm um backup **automático,
-seguro e conferido**. O problema é sério: 60% das pequenas empresas encerram as atividades em até
-seis meses após uma perda grave de dados, 51% dos ataques de *ransomware* tentam destruir os
-backups da vítima e cerca de 58% dos backups corporativos falham — muitas vezes sem que ninguém
-perceba até a hora de restaurar (ver referências no documento do projeto).
+seguro e conferido**. O problema é sério: em 94% dos ataques de *ransomware* os criminosos tentaram
+comprometer os backups da vítima, e 57% dessas tentativas deram certo (Sophos, *State of Ransomware
+2024*); 58% dos backups falham, muitas vezes sem que ninguém perceba até a hora de restaurar (Veeam,
+*Data Protection Report 2021*). O Brasil concentrou mais da metade das tentativas de *ransomware* da
+América Latina entre ago/2024 e jun/2025 (Kaspersky, *Panorama de Ameaças 2025*).
 
 A motivação prática veio da migração de dados entre ERPs de provedores de internet: o backup
 fornecido por alguns sistemas é **incompleto** (dados visíveis na interface não aparecem no dump)
